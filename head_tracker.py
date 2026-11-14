@@ -8,6 +8,7 @@ MediaPipe Solutions ve MediaPipe Tasks API'lerinin her ikisini de destekler.
 
 import builtins
 import os
+import time
 import urllib.request
 import cv2
 import numpy as np
@@ -79,8 +80,10 @@ class HeadTracker:
         from mediapipe.tasks.python import vision
 
         base_options = python.BaseOptions(model_asset_path=model_path)
+        # VIDEO modu: önceki karedeki yüzü takip eder; IMAGE moduna göre daha hızlı ve kararlı
         options = vision.FaceLandmarkerOptions(
             base_options=base_options,
+            running_mode=vision.RunningMode.VIDEO,
             output_face_blendshapes=False,
             output_facial_transformation_matrixes=False,
             num_faces=1
@@ -94,6 +97,10 @@ class HeadTracker:
             raise RuntimeError(f"Kamera ({self.camera_id}) açılamadı! Lütfen cihaz bağlantısını kontrol edin.")
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+        # Sürücü kare biriktirmesin: her zaman en yeni kare işlenir (gecikme azalır)
+        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        self._t0 = time.monotonic()
+        self._last_ts_ms = -1
 
     def release(self):
         """Kaynakları serbest bırakır."""
@@ -129,7 +136,10 @@ class HeadTracker:
                 landmarks = results.multi_face_landmarks[0].landmark
         else:
             mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
-            results = self.landmarker.detect(mp_image)
+            # VIDEO modu kesin artan milisaniye zaman damgası ister
+            ts_ms = max(int((time.monotonic() - self._t0) * 1000), self._last_ts_ms + 1)
+            self._last_ts_ms = ts_ms
+            results = self.landmarker.detect_for_video(mp_image, ts_ms)
             if results.face_landmarks:
                 landmarks = results.face_landmarks[0]
 

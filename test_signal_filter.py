@@ -36,6 +36,26 @@ class OneEuroFilterTest(unittest.TestCase):
         f.update((0.0,), 1.0)
         self.assertEqual(f.update((10.0,), 1.0), (0.0,))
 
+    def test_predict_extrapolates_moving_signal(self):
+        f = OneEuroFilter((1.0, 1.0), (3.0, 3.0))
+        for i in range(60):                       # x sabit hızla artar, y sabit
+            f.update((i / 30.0, 0.0), i / 30.0)
+        t_last = 59 / 30.0
+        x_pred, y_pred = f.predict(t_last + 0.02, horizon=0.05)
+        self.assertGreater(x_pred, f.state[0])    # hareket yönünde ileri
+        self.assertAlmostEqual(y_pred, 0.0, places=6)
+
+    def test_predict_respects_horizon_and_axes(self):
+        f = OneEuroFilter((1.0, 1.0), (3.0, 3.0))
+        for i in range(60):
+            f.update((i / 30.0, i / 30.0), i / 30.0)
+        t_last = 59 / 30.0
+        far = f.predict(t_last + 10.0, horizon=0.05)
+        near = f.predict(t_last + 0.05, horizon=0.05)
+        self.assertAlmostEqual(far[0], near[0])   # ufuk sınırı
+        only_x = f.predict(t_last + 0.05, horizon=0.05, axes=(0,))
+        self.assertEqual(only_x[1], f.state[1])   # y tahmin edilmedi
+
 
 if __name__ == "__main__":
     unittest.main()

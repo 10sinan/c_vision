@@ -107,6 +107,19 @@ class OneEuroFilter:
         self.state, self._dx = tuple(new_state), tuple(new_dx)
         return self.state
 
+    def predict(self, t, horizon, axes=None):
+        """
+        Son filtrelenmiş değeri, filtrelenmiş hızla t anına doğru ileri taşır.
+        Kamera ~30 Hz, ekran 60 Hz: ölçümler arasındaki boşluğu doldurur, gecikmeyi azaltır.
+        :param horizon: en fazla bu kadar saniye ileri tahmin (aşırı taşmayı önler)
+        :param axes: tahmin uygulanacak bileşenler (None = hepsi); gürültülü Z hariç tutulabilir
+        """
+        if self.state is None or self._t is None:
+            return self.state
+        dt = max(0.0, min(t - self._t, horizon))
+        return tuple(s + dx * dt if (axes is None or i in axes) else s
+                     for i, (s, dx) in enumerate(zip(self.state, self._dx)))
+
     def set_state(self, values, t=None):
         """Filtre çıktısını doğrudan ayarlar (ör. yüz kaybolunca merkeze dönüş)."""
         self.state = tuple(values)

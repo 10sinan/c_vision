@@ -43,6 +43,8 @@ DEFAULT_FOCAL_MULT = 0.85
 # Ölçüm: Z (IPD'den) kare başına ~1.2 cm gürültülü, X/Y ise <1 piksel -> Z daha güçlü filtrelenir.
 FILTER_MIN_CUTOFF = (1.0, 1.0, 0.3)   # Hz; düşük = daha pürüzsüz, daha gecikmeli
 FILTER_BETA = (3.0, 3.0, 0.05)        # hıza tepki; yüksek = hızlı harekette daha az gecikme
+PREDICT_HORIZON_S = 0.05              # ölçümler arası hareket tahmini en fazla bu kadar ileri
+PREDICT_AXES = (0, 1)                 # yalnızca X/Y tahmin edilir; Z gürültülü olduğu için hariç
 NEUTRAL_Z_CM = 60.0
 FACE_LOST_TIMEOUT_S = 1.0     # bu süreden sonra merkeze dönüş başlar
 RETURN_RATE = 0.03            # kare başına merkeze yaklaşma oranı
@@ -139,7 +141,10 @@ def main():
                                              zip(filt.state, (0.0, 0.0, NEUTRAL_Z_CM))))
 
             if filt.state is not None:
-                x_n, y_n, z = filt.state
+                if use_mouse or status != "takip":
+                    x_n, y_n, z = filt.state
+                else:
+                    x_n, y_n, z = filt.predict(time.monotonic(), PREDICT_HORIZON_S, PREDICT_AXES)
                 eye = head_to_eye_cm(x_n, y_n, z, FRAME_W, FRAME_H, focal_px, cam_offset)
 
             renderer.draw(eye, dt)
