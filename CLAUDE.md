@@ -12,10 +12,11 @@ Head-tracked real-time 3D parallax ("window into a 3D room" illusion). A webcam 
 - Run the full app (webcam): `python main.py`
 - Run without a camera (mouse acts as head position): `python main.py --mouse`
 - User-specific settings live in `settings.json` (gitignored; [settings.py](settings.py)): screen diagonal + aspect → physical size in cm, webcam gap above the screen top, IPD, focal multiplier. On first run (no file) the settings screen is shown first; `P` reopens it at runtime and `Renderer.set_screen(w_cm, h_cm)` applies the size. Defaults reproduce the old hardcoded 15.6" 16:9 laptop (34.5 × 19.4 cm); `off_axis.py` constants are only fallbacks.
+- Distance calibration ([calibration.py](calibration.py)): menu item or `K`. The user sits at a known distance, ~2 s of `ipd_px` samples are collected (median + MAD spread check), and `focal_mult = z_known * ipd_px / ipd_cm / frame_w` is saved to `settings.json`. The math (`focal_mult_from_measurement`, `evaluate`) is OpenGL-free and tested. The tracker now starts *before* the menu so the camera is warm; `TrackerThread.latest_frame()` returns the last mirrored BGR frame + pose (reference only, no copy).
 - On startup `main.py` shows a scene picker ([menu.py](menu.py)) listing `*.glb`/`*.gltf`/`*.obj` in the repo dir plus a no-model option; `M` returns to it at runtime. `--model` skips the menu.
 - Show a 3D model directly: `python main.py --model scene.glb` (.glb/.gltf with real textures; .obj geometry only, gray). Combine with `--mouse` for no camera. Model view keys (listed in the `main.py` docstring) adjust scale/cover/depth/yaw/pitch; the view is saved on exit to `<model>.view.json` next to the model and reloaded next time. Model files and `*.view.json` are gitignored.
 - Staged demos (development history, each runs standalone): `python stage1_demo.py` (tracking), `stage2_demo.py` (normalize + EMA), `stage3_demo.py` (off-axis render; supports `--mouse`)
-- Tests (pure-math modules only): `python -m unittest test_off_axis test_signal_filter -v`; single test: `python -m unittest test_off_axis.FrustumTest.test_centered_eye_gives_symmetric_frustum`
+- Tests (pure-math modules only): `python -m unittest discover -p "test_*.py"`; single test: `python -m unittest test_off_axis.FrustumTest.test_centered_eye_gives_symmetric_frustum`
 - No linter or build step is configured. `off_axis.py` is deliberately OpenGL-free so its math can be tested in isolation.
 
 ## Architecture

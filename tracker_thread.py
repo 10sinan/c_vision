@@ -16,6 +16,7 @@ class TrackerThread:
         self._pose = None          # en son ham poz
         self._stamp = 0.0          # en son yüz tespit zamanı
         self._seq = 0              # her yeni pozda artar (yeni ölçüm tespiti için)
+        self._frame = None         # son kamera karesi (aynalı BGR); kalibrasyon/kayıt önizlemesi için
         self._running = False
         self._thread = None
         self.failed = False        # kamera akışı koptu mu
@@ -32,6 +33,8 @@ class TrackerThread:
             if not ok:
                 self.failed = True
                 break
+            with self._lock:
+                self._frame = _frame   # yalnızca referans tutulur, kopya yok
             if pose is not None:
                 with self._lock:
                     self._pose = pose
@@ -44,6 +47,11 @@ class TrackerThread:
             if self._pose is None:
                 return None, float("inf")
             return self._pose, time.monotonic() - self._stamp
+
+    def latest_frame(self):
+        """:return: (son kare | None, o anki poz | None). Kare ve poz aynı anda alınır."""
+        with self._lock:
+            return self._frame, self._pose
 
     def latest_measurement(self):
         """:return: (pose | None, ölçüm zamanı (monotonic), sıra no)"""

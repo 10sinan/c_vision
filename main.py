@@ -12,6 +12,7 @@ Tuşlar:
 
   M              Sahne seçim menüsüne dön
   P              Ayarlar (ekran boyutu, kamera konumu, göz mesafesi)
+  K              Mesafe kalibrasyonu (kamera varken)
 
 Açılışta proje klasöründeki modeller (.glb/.gltf/.obj) listelenir ve seçim istenir.
 --model verilirse menü atlanır.
@@ -34,7 +35,7 @@ import pygame
 from pygame.locals import (QUIT, KEYDOWN, VIDEORESIZE, K_ESCAPE, K_q, K_f, K_h,
                            K_LEFT, K_RIGHT, K_UP, K_DOWN, K_r, K_MINUS, K_PLUS,
                            K_EQUALS, K_KP_MINUS, K_KP_PLUS, K_l, K_c, K_PAGEUP,
-                           K_PAGEDOWN, K_w, K_s, K_a, K_d, K_t, K_g, K_m, K_p)
+                           K_PAGEDOWN, K_w, K_s, K_a, K_d, K_t, K_g, K_m, K_p, K_k)
 
 from head_tracker import HeadTracker
 from tracker_thread import TrackerThread
@@ -44,7 +45,8 @@ from signal_filter import PoseNormalizer, OneEuroFilter
 from off_axis import head_to_eye_cm
 from settings import Settings, nearest_aspect_index, ASPECT_PRESETS
 from renderer import Renderer
-from menu import Menu, find_models, NO_MODEL, SETTINGS_ITEM
+from menu import Menu, find_models, NO_MODEL, SETTINGS_ITEM, CALIBRATION_ITEM
+from calibration import run_calibration
 
 FRAME_W, FRAME_H = 640, 480
 # One Euro filtre ayarları, bileşen başına (x_n, y_n, z_cm).
@@ -76,13 +78,33 @@ def main():
     settings, settings_existed = Settings.load(default_aspect=default_aspect)
     renderer.set_screen(*settings.screen_cm())
     models = find_models(os.path.dirname(os.path.abspath(__file__)))
-    menu_items = models + [NO_MODEL, SETTINGS_ITEM]
+    menu_items = models + [NO_MODEL] + ([] if use_mouse else [CALIBRATION_ITEM]) + [SETTINGS_ITEM]
+
+    # Kamera menüden ÖNCE başlar: ısınır ve kalibrasyon ekranı hemen canlı görüntü verir.
+    tracker = None
+    if not use_mouse:
+        tracker = TrackerThread(HeadTracker(width=FRAME_W, height=FRAME_H, real_ipd_cm=settings.ipd_cm))
+        tracker.tracker.focal_length_px = FRAME_W * settings.focal_mult
+        tracker.start()
+
+    def calibrate():
+        """Kalibrasyon ekranı; sonucu takipçiye uygular. :return: False ise çıkış istendi."""
+        ok = run_calibration(menu, tracker, settings, FRAME_W)
+        tracker.tracker.focal_length_px = FRAME_W * settings.focal_mult
+        return ok
+
+    def quit_early():
+        if tracker:
+            tracker.stop()
+        pygame.quit()
 
     def open_settings():
         """Ayarlar ekranını açar, kaydeder ve uygular. :return: False ise çıkış istendi."""
         ok = menu.edit_settings(settings)
         settings.save()
         renderer.set_screen(*settings.screen_cm())
+        if tracker:
+            tracker.tracker.real_ipd_cm = settings.ipd_cm
         return ok
 
     def pick_and_load(current):
@@ -97,6 +119,11 @@ def main():
                     return False
                 start = menu_items.index(SETTINGS_ITEM)
                 continue
+            if choice == CALIBRATION_ITEM:
+                if not calibrate():
+                    return False
+                start = menu_items.index(CALIBRATION_ITEM)
+                continue
             break
         if choice is not NO_MODEL:
             menu.show_loading(choice)
@@ -108,10 +135,10 @@ def main():
     else:
         # İlk açılışta (ayar dosyası yok) ekran boyutunu soruyoruz
         if not settings_existed and not open_settings():
-            pygame.quit()
+            quit_early()
             return
         if models and not pick_and_load(None):
-            pygame.quit()
+            quit_early()
             return
     clock = pygame.time.Clock()
     filt = OneEuroFilter(FILTER_MIN_CUTOFF, FILTER_BETA)
@@ -122,11 +149,6 @@ def main():
     focal_mult = settings.focal_mult
     cam_offset = settings.cam_offset_y_cm()
     hud = True
-
-    tracker = None
-    if not use_mouse:
-        tracker = TrackerThread(HeadTracker(width=FRAME_W, height=FRAME_H, real_ipd_cm=settings.ipd_cm))
-        tracker.start()
 
     eye = (0.0, cam_offset, NEUTRAL_Z_CM)
     running = True
@@ -157,6 +179,11 @@ def main():
                         cam_offset = settings.cam_offset_y_cm()
                         if tracker:
                             tracker.tracker.real_ipd_cm = settings.ipd_cm
+                        clock.tick()
+                    elif k == K_k and tracker:
+                        if not calibrate():
+                            running = False
+                        focal_mult = settings.focal_mult
                         clock.tick()
                     elif k == K_m:
                         if not pick_and_load(renderer.model_path):

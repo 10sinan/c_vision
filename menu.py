@@ -15,12 +15,13 @@ from pygame.locals import (QUIT, KEYDOWN, MOUSEMOTION, MOUSEBUTTONDOWN, VIDEORES
 
 from settings import ASPECT_PRESETS, nearest_aspect_index
 from OpenGL.GL import (glClear, glClearColor, glWindowPos2d, glDrawPixels, glEnable,
-                       glBlendFunc, GL_COLOR_BUFFER_BIT, GL_DEPTH_BUFFER_BIT, GL_RGBA,
+                       glBlendFunc, GL_COLOR_BUFFER_BIT, GL_DEPTH_BUFFER_BIT, GL_RGBA, GL_RGB,
                        GL_UNSIGNED_BYTE, GL_BLEND, GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
 
 MODEL_PATTERNS = ("*.glb", "*.gltf", "*.obj")
 NO_MODEL = None  # menüde "model yok" (tel kafes oda) seçeneği
 SETTINGS_ITEM = "<ayarlar>"  # menüde ayarlar ekranını açan öğe
+CALIBRATION_ITEM = "<kalibrasyon>"  # menüde kalibrasyon ekranını açan öğe (kamera varken)
 
 TITLE_COLOR = (120, 220, 255)
 TEXT_COLOR = (215, 215, 225)
@@ -45,6 +46,8 @@ def pretty_name(path):
 def _label(path):
     if path is NO_MODEL:
         return "Tel kafes oda (model yok)", ""
+    if path == CALIBRATION_ITEM:
+        return "Kalibrasyon", "mesafe tahminini yüzüne göre ayarla"
     if path == SETTINGS_ITEM:
         return "Ayarlar", "ekran boyutu, kamera konumu"
     size_mb = os.path.getsize(path) / (1024 * 1024)
@@ -58,6 +61,12 @@ def _blit_text(font, text, color, x, y_top, win_h):
     glWindowPos2d(x, win_h - y_top - surf.get_height())
     glDrawPixels(surf.get_width(), surf.get_height(), GL_RGBA, GL_UNSIGNED_BYTE, data)
     return surf.get_width(), surf.get_height()
+
+
+def _blit_image(rgb_bytes, width, height, x, y_top, win_h):
+    """Ham RGB piksel verisini (üstten aşağı satırlar) pencerede (x, y_top) noktasına basar."""
+    glWindowPos2d(x, win_h - y_top - height)
+    glDrawPixels(width, height, GL_RGB, GL_UNSIGNED_BYTE, rgb_bytes)
 
 
 class Menu:
