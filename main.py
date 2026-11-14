@@ -13,6 +13,7 @@ Tuşlar:
   M              Sahne seçim menüsüne dön
   P              Ayarlar (ekran boyutu, kamera konumu, göz mesafesi)
   K              Mesafe kalibrasyonu (kamera varken)
+  O              Işık/sis görünümü: Doğal / Yumuşak / Dramatik
   E              Ekrandan taşan yaprak/kelebek + toz efektlerini aç/kapa
   [ / ]          Efekt yoğunluğu -/+ 0.25
   V              Video kaydı aç/kapa (sahne + kamera yan yana, kayitlar/ klasörüne)
@@ -38,7 +39,7 @@ import pygame
 from pygame.locals import (QUIT, KEYDOWN, VIDEORESIZE, K_ESCAPE, K_q, K_f, K_h,
                            K_LEFT, K_RIGHT, K_UP, K_DOWN, K_r, K_MINUS, K_PLUS,
                            K_EQUALS, K_KP_MINUS, K_KP_PLUS, K_l, K_c, K_PAGEUP,
-                           K_PAGEDOWN, K_w, K_s, K_a, K_d, K_t, K_g, K_m, K_p, K_k, K_v, K_e, K_LEFTBRACKET, K_RIGHTBRACKET)
+                           K_PAGEDOWN, K_w, K_s, K_a, K_d, K_t, K_g, K_m, K_p, K_k, K_v, K_e, K_LEFTBRACKET, K_RIGHTBRACKET, K_o)
 
 from head_tracker import HeadTracker
 from tracker_thread import TrackerThread
@@ -47,7 +48,7 @@ import time
 from signal_filter import PoseNormalizer, OneEuroFilter
 from off_axis import head_to_eye_cm
 from settings import Settings, nearest_aspect_index, ASPECT_PRESETS
-from renderer import Renderer
+from renderer import Renderer, LOOKS
 from menu import Menu, find_models, NO_MODEL, SETTINGS_ITEM, CALIBRATION_ITEM
 from calibration import run_calibration
 from recorder import Recorder
@@ -189,6 +190,7 @@ def main():
                             tracker.tracker.real_ipd_cm = settings.ipd_cm
                         clock.tick()
                     elif k == K_e: renderer.effects = not renderer.effects
+                    elif k == K_o: renderer.look = (renderer.look + 1) % len(LOOKS)
                     elif k in (K_LEFTBRACKET, K_RIGHTBRACKET):
                         renderer.fx_density = min(3.0, max(0.0, renderer.fx_density + (0.25 if k == K_RIGHTBRACKET else -0.25)))
                         renderer.sync_effects()

@@ -31,6 +31,8 @@ from OpenGL.GL import (
     glReadPixels, glReadBuffer, GL_RGB, GL_BACK, glDepthMask, GL_FALSE, GL_TRUE as _GL_TRUE,
     GL_POINTS, GL_TRIANGLE_FAN, GL_POINT_SMOOTH, glPointSize, glPointParameterfv, glPointParameterf,
     GL_POINT_DISTANCE_ATTENUATION, GL_POINT_SIZE_MIN, GL_POINT_SIZE_MAX,
+    GL_LIGHT1, GL_LIGHT_MODEL_AMBIENT, glLightModelfv, GL_SPECULAR, GL_FOG, GL_FOG_MODE, GL_LINEAR,
+    GL_FOG_START, GL_FOG_END, GL_FOG_COLOR, glFogi, glFogf, glFogfv,
 )
 
 from model_loader import load_model, model_bounds
@@ -44,7 +46,18 @@ MODEL_GAP_CM = 2.0        # modelin ön yüzü ekran camının bu kadar arkasın
 MAX_TEXTURE_PX = 2048     # bundan büyük dokular küçültülür
 # Model başına kaydedilen görünüm ayarları (<model>.view.json) ve varsayılanları
 VIEW_DEFAULTS = {"model_scale": 1.0, "cover": True, "depth": 0.0, "yaw": 0.0, "pitch": 0.0,
-                 "effects": True, "fx_density": 1.0}
+                 "effects": True, "fx_density": 1.0, "look": 0}
+# Işık/sis ön ayarları (O tuşu). ambient: genel dolgu, key: ana ışık, fill: karşı yönden zayıf soğuk ışık,
+# fog: en uzak noktada sisin gücü (0 = sis yok). Sis derinlik ipucudur: uzak parçalar karanlık havaya karışır.
+LOOKS = (
+    {"name": "Doğal", "ambient": (0.32, 0.34, 0.40), "key": (0.85, 0.82, 0.72), "fill": (0.22, 0.28, 0.40), "fog": 0.6},
+    {"name": "Yumuşak", "ambient": (0.55, 0.55, 0.58), "key": (0.55, 0.55, 0.50), "fill": (0.15, 0.15, 0.20), "fog": 0.0},
+    {"name": "Dramatik", "ambient": (0.16, 0.18, 0.26), "key": (1.00, 0.92, 0.75), "fill": (0.10, 0.14, 0.25), "fog": 1.0},
+)
+# Dünyaya sabit ana ışık yönü (sağ, yukarı, kullanıcıya doğru); efektlerdeki yaprak gölgelendirmesiyle aynı
+KEY_LIGHT_DIR = (0.4, 0.9, 0.5)
+FILL_LIGHT_DIR = (-0.7, -0.3, 0.6)
+FOG_COLOR = (0.03, 0.05, 0.10)
 
 
 def _line(a, b):
@@ -258,7 +271,7 @@ class Renderer:
         self.size = size
         glViewport(0, 0, *size)
 
-    def _draw_model(self):
+    def _draw_model(self, eye_z=60.0):
         s = (self._cover_scale if self.cover else self._fit_scale) * self.model_scale
         glEnable(GL_DEPTH_TEST)
         glEnable(GL_LIGHTING)
@@ -268,10 +281,27 @@ class Renderer:
         glLightModeli(GL_LIGHT_MODEL_TWO_SIDE, GL_TRUE)   # yaprak/çimen gibi tek yüzlü düzlemler
         glEnable(GL_ALPHA_TEST)                          # dokudaki saydam pikselleri at
         glAlphaFunc(GL_GREATER, 0.4)
-        # Işık dünyaya sabit (kamera ötelemesinden sonra, model dönüşümünden önce)
-        glLightfv(GL_LIGHT0, GL_POSITION, (0.3, 0.6, 1.0, 0.0))
-        glLightfv(GL_LIGHT0, GL_DIFFUSE, (0.75, 0.75, 0.75, 1.0))
-        glLightfv(GL_LIGHT0, GL_AMBIENT, (0.45, 0.45, 0.5, 1.0))
+        # Işıklar dünyaya sabit (kamera ötelemesinden sonra, model dönüşümünden önce çağrılır)
+        look = LOOKS[self.look % len(LOOKS)]
+        glLightModelfv(GL_LIGHT_MODEL_AMBIENT, (*look["ambient"], 1.0))
+        glLightfv(GL_LIGHT0, GL_POSITION, (*KEY_LIGHT_DIR, 0.0))
+        glLightfv(GL_LIGHT0, GL_DIFFUSE, (*look["key"], 1.0))
+        glLightfv(GL_LIGHT0, GL_AMBIENT, (0.0, 0.0, 0.0, 1.0))
+        glLightfv(GL_LIGHT0, GL_SPECULAR, (0.0, 0.0, 0.0, 1.0))
+        glEnable(GL_LIGHT1)
+        glLightfv(GL_LIGHT1, GL_POSITION, (*FILL_LIGHT_DIR, 0.0))
+        glLightfv(GL_LIGHT1, GL_DIFFUSE, (*look["fill"], 1.0))
+        glLightfv(GL_LIGHT1, GL_AMBIENT, (0.0, 0.0, 0.0, 1.0))
+        glLightfv(GL_LIGHT1, GL_SPECULAR, (0.0, 0.0, 0.0, 1.0))
+        if look["fog"] > 0.0:
+            # Sis mesafesi göz uzayında düzlemsel: gözden modelin en yakın ve en uzak noktasına kadar
+            near_d = eye_z + MODEL_GAP_CM + self.depth
+            span = max(2.0 * self._half_depth * s, 1.0)
+            glEnable(GL_FOG)
+            glFogi(GL_FOG_MODE, GL_LINEAR)
+            glFogfv(GL_FOG_COLOR, (*FOG_COLOR, 1.0))
+            glFogf(GL_FOG_START, max(near_d, 0.0))
+            glFogf(GL_FOG_END, max(near_d, 0.0) + span / look["fog"])
 
         # Ekran camının önünde kalan her şey kesilir (gerçek pencere gibi): z <= 0 tutulur.
         # Düzlem şu anki (dünya) koordinatlarında tanımlanır.
@@ -290,6 +320,8 @@ class Renderer:
 
         glDisable(GL_CLIP_PLANE0)
         glDisable(GL_ALPHA_TEST)
+        glDisable(GL_FOG)
+        glDisable(GL_LIGHT1)
         glDisable(GL_LIGHTING)
         glDisable(GL_DEPTH_TEST)
 
@@ -358,7 +390,7 @@ class Renderer:
         if self.show_room:
             _draw_room(self.screen_w, self.screen_h)
         if self.model_list is not None:
-            self._draw_model()
+            self._draw_model(eye[2])
             if self.effects:
                 self.fx.update(dt)
                 self._draw_effects()

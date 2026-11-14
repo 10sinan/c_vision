@@ -22,7 +22,7 @@ BASE_DUST, BASE_LEAVES, BASE_BUTTERFLIES = 160, 10, 5
 LEAF_COLORS = np.array([(0.35, 0.65, 0.20), (0.55, 0.75, 0.25),
                         (0.85, 0.65, 0.15), (0.80, 0.40, 0.10)])
 BUTTERFLY_COLORS = np.array([(0.95, 0.55, 0.10), (0.20, 0.50, 0.95), (0.95, 0.90, 0.30)])
-LIGHT_DIR = np.array([0.3, 0.6, 1.0]) / np.linalg.norm([0.3, 0.6, 1.0])
+LIGHT_DIR = np.array([0.4, 0.9, 0.5]) / np.linalg.norm([0.4, 0.9, 0.5])   # renderer.KEY_LIGHT_DIR ile aynı
 
 
 def _wrap(x, half):
