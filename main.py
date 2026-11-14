@@ -10,7 +10,12 @@ Tuşlar:
   - / +          Titreme yumuşatma: daha pürüzsüz / daha hızlı tepki
   R              Kalibrasyonu (ve model görünümünü) varsayılana döndür
 
-Model tuşları (--model ile; ayarlar çıkışta <model>.view.json'a kaydedilir):
+  M              Sahne seçim menüsüne dön
+
+Açılışta proje klasöründeki modeller (.glb/.gltf/.obj) listelenir ve seçim istenir.
+--model verilirse menü atlanır.
+
+Model tuşları (model açıkken; ayarlar çıkışta <model>.view.json'a kaydedilir):
   PageUp/PageDn  Boyut +/- %10
   W / S          Sahneyi yaklaştır / uzaklaştır (2 cm)
   A / D          Sahneyi sola / sağa döndür (5°)
@@ -22,12 +27,13 @@ Kamerasız test: python main.py --mouse
 3B model:       python main.py --model araba.glb   (.obj / .glb / .gltf)
 """
 
+import os
 import sys
 import pygame
 from pygame.locals import (QUIT, KEYDOWN, VIDEORESIZE, K_ESCAPE, K_q, K_f, K_h,
                            K_LEFT, K_RIGHT, K_UP, K_DOWN, K_r, K_MINUS, K_PLUS,
                            K_EQUALS, K_KP_MINUS, K_KP_PLUS, K_l, K_c, K_PAGEUP,
-                           K_PAGEDOWN, K_w, K_s, K_a, K_d, K_t, K_g)
+                           K_PAGEDOWN, K_w, K_s, K_a, K_d, K_t, K_g, K_m)
 
 from head_tracker import HeadTracker
 from tracker_thread import TrackerThread
@@ -36,6 +42,7 @@ import time
 from signal_filter import PoseNormalizer, OneEuroFilter
 from off_axis import head_to_eye_cm, CAMERA_OFFSET_Y_CM
 from renderer import Renderer
+from menu import Menu, find_models, NO_MODEL
 
 FRAME_W, FRAME_H = 640, 480
 DEFAULT_FOCAL_MULT = 0.85
@@ -58,7 +65,27 @@ def main():
         if i + 1 >= len(sys.argv):
             sys.exit("Kullanım: python main.py --model dosya.glb")
         model_path = sys.argv[i + 1]
-    renderer = Renderer(model_path=model_path)
+    renderer = Renderer()
+    menu = Menu(renderer)
+    models = find_models(os.path.dirname(os.path.abspath(__file__)))
+    menu_items = models + [NO_MODEL]
+
+    def pick_and_load(current):
+        """Menüyü gösterir, seçilen modeli yükler. :return: False ise çıkış istendi."""
+        start = menu_items.index(current) if current in menu_items else 0
+        choice = menu.choose(menu_items, start)
+        if choice is False:
+            return False
+        if choice is not NO_MODEL:
+            menu.show_loading(choice)
+        renderer.load_model(choice)
+        return True
+
+    if model_path is not None:
+        renderer.load_model(model_path)
+    elif models and not pick_and_load(None):
+        pygame.quit()
+        return
     clock = pygame.time.Clock()
     filt = OneEuroFilter(FILTER_MIN_CUTOFF, FILTER_BETA)
     smooth = 1.0          # +/- ile değişen yumuşatma çarpanı (min_cutoff'a bölünür)
@@ -97,6 +124,10 @@ def main():
                         smooth = max(0.25, smooth / 1.25)   # daha hızlı tepki
                     elif k in (K_MINUS, K_KP_MINUS):
                         smooth = min(8.0, smooth * 1.25)    # daha pürüzsüz
+                    elif k == K_m:
+                        if not pick_and_load(renderer.model_path):
+                            running = False
+                        clock.tick()   # menüde geçen süre dt'ye eklenmesin
                     elif k == K_l: renderer.show_room = not renderer.show_room
                     elif k == K_c: renderer.cover = not renderer.cover
                     elif k == K_w: renderer.depth += 2.0

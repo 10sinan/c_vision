@@ -26,7 +26,7 @@ from OpenGL.GL import (
     GL_LINEAR, GL_LINEAR_MIPMAP_LINEAR, GL_TEXTURE_WRAP_S, GL_TEXTURE_WRAP_T,
     GL_REPEAT, GL_GENERATE_MIPMAP, GL_UNPACK_ALIGNMENT, GL_VERTEX_ARRAY,
     GL_NORMAL_ARRAY, GL_TEXTURE_COORD_ARRAY, GL_COLOR_ARRAY, GL_FLOAT,
-    GL_UNSIGNED_INT, glClipPlane, GL_CLIP_PLANE0,
+    GL_UNSIGNED_INT, glClipPlane, GL_CLIP_PLANE0, glDeleteLists, glDeleteTextures,
 )
 
 from model_loader import load_model, model_bounds
@@ -103,7 +103,8 @@ def _upload_texture(image):
 
 
 def _compile_model(parts):
-    """Tüm parçaları dokularıyla birlikte tek bir display list'e derler (hızlı çizim)."""
+    """Tüm parçaları dokularıyla birlikte tek bir display list'e derler (hızlı çizim).
+    :return: (display list kimliği, doku kimlikleri)"""
     # Önce dokular yüklenir; aynı görüntüyü paylaşan parçalar tek doku kullanır
     textures = {}
     for p in parts:
@@ -139,7 +140,7 @@ def _compile_model(parts):
     glDisableClientState(GL_NORMAL_ARRAY)
     glDisableClientState(GL_VERTEX_ARRAY)
     glEndList()
-    return lst
+    return lst, list(textures.values())
 
 
 class Renderer:
@@ -157,6 +158,8 @@ class Renderer:
         self.angle = 0.0
 
         self.model_list = None
+        self.model_path = None
+        self._textures = []
         self.show_room = True
         # Görünüm ayarları (VIEW_DEFAULTS):
         #   model_scale  boyut çarpanı
@@ -167,17 +170,37 @@ class Renderer:
         self.reset_view()
         self._view_path = None
         if model_path:
-            self._view_path = os.path.splitext(model_path)[0] + ".view.json"
-            self._load_view()
-            parts = load_model(model_path)
-            lo, hi = model_bounds(parts)
-            self._center = (lo + hi) / 2.0
-            self._half_depth = float(hi[2] - lo[2]) / 2.0
-            ext = [max(float(e), 1e-9) for e in (hi - lo)]
-            self._fit_scale = min(SCREEN_W_CM / ext[0], SCREEN_H_CM / ext[1])
-            self._cover_scale = max(SCREEN_W_CM / ext[0], SCREEN_H_CM / ext[1])
-            self.model_list = _compile_model(parts)
-            self.show_room = False  # model varken tel kafes çizgiler gizli (L ile açılır)
+            self.load_model(model_path)
+
+    def load_model(self, model_path):
+        """Modeli yükler; varsa önceki modelin görünümünü kaydedip GPU kaynaklarını bırakır.
+        model_path=None: modelsiz moda (tel kafes oda + küp) döner."""
+        self.save_view()
+        self.unload_model()
+        self.reset_view()
+        if model_path is None:
+            self.show_room = True
+            return
+        parts = load_model(model_path)
+        lo, hi = model_bounds(parts)
+        self._center = (lo + hi) / 2.0
+        self._half_depth = float(hi[2] - lo[2]) / 2.0
+        ext = [max(float(e), 1e-9) for e in (hi - lo)]
+        self._fit_scale = min(SCREEN_W_CM / ext[0], SCREEN_H_CM / ext[1])
+        self._cover_scale = max(SCREEN_W_CM / ext[0], SCREEN_H_CM / ext[1])
+        self.model_list, self._textures = _compile_model(parts)
+        self.model_path = model_path
+        self._view_path = os.path.splitext(model_path)[0] + ".view.json"
+        self._load_view()
+        self.show_room = False  # model varken tel kafes çizgiler gizli (L ile açılır)
+
+    def unload_model(self):
+        if self.model_list is not None:
+            glDeleteLists(self.model_list, 1)
+        if self._textures:
+            glDeleteTextures(self._textures)
+        self.model_list, self._textures = None, []
+        self.model_path = self._view_path = None
 
     def reset_view(self):
         for k, v in VIEW_DEFAULTS.items():
