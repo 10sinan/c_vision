@@ -28,11 +28,14 @@ from OpenGL.GL import (
     GL_REPEAT, GL_GENERATE_MIPMAP, GL_UNPACK_ALIGNMENT, GL_VERTEX_ARRAY,
     GL_NORMAL_ARRAY, GL_TEXTURE_COORD_ARRAY, GL_COLOR_ARRAY, GL_FLOAT,
     GL_UNSIGNED_INT, glClipPlane, GL_CLIP_PLANE0, glDeleteLists, glDeleteTextures,
-    glReadPixels, glReadBuffer, GL_RGB, GL_BACK,
+    glReadPixels, glReadBuffer, GL_RGB, GL_BACK, glDepthMask, GL_FALSE, GL_TRUE as _GL_TRUE,
+    GL_POINTS, GL_TRIANGLE_FAN, GL_POINT_SMOOTH, glPointSize, glPointParameterfv, glPointParameterf,
+    GL_POINT_DISTANCE_ATTENUATION, GL_POINT_SIZE_MIN, GL_POINT_SIZE_MAX,
 )
 
 from model_loader import load_model, model_bounds
 from off_axis import off_axis_frustum, SCREEN_W_CM, SCREEN_H_CM   # varsayılan ekran boyutu
+from effects import Effects
 
 ROOM_DEPTH_CM = 40.0
 GRID_STEPS = 8            # duvarlardaki derinlik çizgisi sayısı
@@ -40,7 +43,8 @@ NEAR, FAR = 1.0, 2000.0
 MODEL_GAP_CM = 2.0        # modelin ön yüzü ekran camının bu kadar arkasında durur
 MAX_TEXTURE_PX = 2048     # bundan büyük dokular küçültülür
 # Model başına kaydedilen görünüm ayarları (<model>.view.json) ve varsayılanları
-VIEW_DEFAULTS = {"model_scale": 1.0, "cover": True, "depth": 0.0, "yaw": 0.0, "pitch": 0.0}
+VIEW_DEFAULTS = {"model_scale": 1.0, "cover": True, "depth": 0.0, "yaw": 0.0, "pitch": 0.0,
+                 "effects": True, "fx_density": 1.0}
 
 
 def _line(a, b):
@@ -171,6 +175,9 @@ class Renderer:
         #   depth        sahneyi ekrana doğru (+) / uzağa (-) kaydırma, cm
         #   yaw          sahneyi dikey eksen etrafında döndürme, derece
         #   pitch        sahneyi öne/arkaya eğme, derece (+: üstten bakış)
+        #   effects      ekrandan taşan yaprak/kelebek + toz efektleri açık mı
+        #   fx_density   efekt yoğunluğu çarpanı
+        self.fx = Effects(self.screen_w, self.screen_h)
         self.reset_view()
         self._view_path = None
         if model_path:
@@ -195,11 +202,13 @@ class Renderer:
         self.model_path = model_path
         self._view_path = os.path.splitext(model_path)[0] + ".view.json"
         self._load_view()
+        self.sync_effects()
         self.show_room = False  # model varken tel kafes çizgiler gizli (L ile açılır)
 
     def set_screen(self, width_cm, height_cm):
         """Fiziksel ekran boyutunu ayarlar (cm); oda çizgileri, model ölçeği ve frustum buna uyar."""
         self.screen_w, self.screen_h = float(width_cm), float(height_cm)
+        self.fx.set_screen(self.screen_w, self.screen_h)
         self._update_scales()
 
     def _update_scales(self):
@@ -221,6 +230,12 @@ class Renderer:
     def reset_view(self):
         for k, v in VIEW_DEFAULTS.items():
             setattr(self, k, v)
+        self.sync_effects()
+
+    def sync_effects(self):
+        """Efekt yoğunluğu ayarını Effects nesnesine uygular (görünüm yüklenince/değişince çağrılır)."""
+        if hasattr(self, "fx"):
+            self.fx.set_density(self.fx_density)
 
     def _load_view(self):
         try:
@@ -278,6 +293,54 @@ class Renderer:
         glDisable(GL_LIGHTING)
         glDisable(GL_DEPTH_TEST)
 
+    def _draw_effects(self):
+        """
+        Ekranın önünde süzülen yaprak/kelebekler ve sahnedeki toz. Clip düzlemi KAPALI çizilir
+        (nesneler camın önüne taşabilsin). Derinlik tamponu modelden kalır -> toz model arkasında gizlenir.
+        """
+        n_dust, n_leaf, n_bfly = self.fx.counts
+        if n_dust + n_leaf + n_bfly == 0:
+            return
+        glEnable(GL_DEPTH_TEST)
+        if n_dust:
+            glDepthMask(GL_FALSE)                        # yarı saydam: derinlik yazmaz
+            glEnable(GL_POINT_SMOOTH)
+            glPointSize(3.5)
+            try:   # uzaktaki toz küçük, yakındaki büyük görünsün (60 cm'de 3.5 px)
+                glPointParameterfv(GL_POINT_DISTANCE_ATTENUATION, (0.0, 0.0, 1.0 / (60.0 * 60.0)))
+                glPointParameterf(GL_POINT_SIZE_MIN, 1.0)
+                glPointParameterf(GL_POINT_SIZE_MAX, 9.0)
+            except Exception:
+                pass                                     # sürücü desteklemiyorsa sabit boyut
+            glBegin(GL_POINTS)
+            glColor4f(1.0, 0.95, 0.7, 0.6)
+            for p in self.fx.dust_positions():
+                glVertex3f(*p)
+            glEnd()
+            glDisable(GL_POINT_SMOOTH)
+            glDepthMask(_GL_TRUE)
+        for i in range(n_leaf):
+            verts, color = self.fx.leaf_quad(i)
+            glColor4f(*color, 1.0)
+            glBegin(GL_TRIANGLE_FAN)
+            for v in verts:
+                glVertex3f(*v)
+            glEnd()
+        for i in range(n_bfly):
+            tris, color = self.fx.butterfly_wings(i)
+            glBegin(GL_TRIANGLES)
+            for k, tri in enumerate(tris):                    # sıra: sol üst, sol alt, sağ üst, sağ alt
+                glColor4f(*(color * (1.0 if k % 2 == 0 else 0.8)), 1.0)
+                for v in tri:
+                    glVertex3f(*v)
+            glEnd()
+            glBegin(GL_LINES)                                 # gövde
+            glColor4f(0.1, 0.08, 0.06, 1.0)
+            for v in self.fx.butterfly_body(i):
+                glVertex3f(*v)
+            glEnd()
+        glDisable(GL_DEPTH_TEST)
+
     def draw(self, eye, dt=0.0, present=True):
         """eye: ekran merkezine göre (ex, ey, ez) cm. present=False: ekrana basmaz (grab_frame için)."""
         self.angle += 25.0 * dt
@@ -296,6 +359,9 @@ class Renderer:
             _draw_room(self.screen_w, self.screen_h)
         if self.model_list is not None:
             self._draw_model()
+            if self.effects:
+                self.fx.update(dt)
+                self._draw_effects()
         else:
             glPushMatrix()
             glTranslatef(0.0, 0.0, -ROOM_DEPTH_CM * 0.5)
