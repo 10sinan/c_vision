@@ -5,3 +5,4 @@ venv/
 *.gltf
 *.view.json
 settings.json
+.thumbs/

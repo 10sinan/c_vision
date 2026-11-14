@@ -9,11 +9,12 @@ import glob
 import os
 
 import pygame
-from pygame.locals import (QUIT, KEYDOWN, MOUSEMOTION, MOUSEBUTTONDOWN, VIDEORESIZE,
+from pygame.locals import (QUIT, KEYDOWN, MOUSEMOTION, MOUSEBUTTONDOWN, MOUSEWHEEL, VIDEORESIZE,
                            K_ESCAPE, K_q, K_UP, K_DOWN, K_LEFT, K_RIGHT, K_RETURN, K_KP_ENTER,
                            K_SPACE, K_f, KMOD_SHIFT)
 
 from settings import ASPECT_PRESETS, nearest_aspect_index
+import thumbnails
 from OpenGL.GL import (glClear, glClearColor, glWindowPos2d, glDrawPixels, glEnable,
                        glBlendFunc, GL_COLOR_BUFFER_BIT, GL_DEPTH_BUFFER_BIT, GL_RGBA, GL_RGB,
                        GL_UNSIGNED_BYTE, GL_BLEND, GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
@@ -75,11 +76,42 @@ class Menu:
         self.title_font = pygame.font.Font(None, 64)
         self.item_font = pygame.font.Font(None, 40)
         self.small_font = pygame.font.Font(None, 26)
+        self._thumbs = {}      # öğe -> (rgb bayt, genişlik, yükseklik) | None
+        self._scroll = 0       # listenin ilk görünen öğesi
+
+    TOP, ROW_H, THUMB_W = 130, 108, 160
+
+    def _visible_rows(self):
+        return max(1, (self.renderer.size[1] - self.TOP - 90) // self.ROW_H)
 
     def _layout(self, n):
-        """:return: her öğenin (y_üst, yükseklik) satırı"""
-        top, row_h = 150, 62
-        return [(top + i * row_h, row_h) for i in range(n)]
+        """:return: görünen öğelerin (öğe_indeksi, y_üst) listesi (kaydırma uygulanmış)"""
+        first = self._scroll
+        return [(i, self.TOP + (i - first) * self.ROW_H) for i in range(first, min(n, first + self._visible_rows()))]
+
+    def _keep_visible(self, selected, n):
+        rows = self._visible_rows()
+        if selected < self._scroll:
+            self._scroll = selected
+        elif selected >= self._scroll + rows:
+            self._scroll = selected - rows + 1
+        self._scroll = max(0, min(self._scroll, max(0, n - rows)))
+
+    def prepare_previews(self, items):
+        """
+        Eksik önizlemeleri üretir (yalnızca ilk seferde birkaç saniye sürer), hepsini belleğe alır.
+        Üretim modeli yükleyip bıraktığı için, o an yüklü model varsa sonda geri yüklenir.
+        """
+        previous = self.renderer.model_path
+        todo = [it for it in items if (it is NO_MODEL or os.path.isfile(it)) and not thumbnails.has_thumbnail(it)]
+        for n, item in enumerate(todo, 1):
+            self.show_loading(item, f"Önizleme hazırlanıyor ({n}/{len(todo)})")
+            thumbnails.ensure_thumbnail(self.renderer, item)
+        if todo:
+            self.renderer.load_model(previous)   # None ise modelsiz moda döner, belleği boşaltır
+        for item in items:
+            if item is NO_MODEL or (isinstance(item, str) and os.path.isfile(item)):
+                self._thumbs[item] = thumbnails.load_thumbnail_rgb(thumbnails.thumb_path(item), self.THUMB_W)
 
     def _draw(self, items, selected):
         w, h = self.renderer.size
@@ -89,14 +121,21 @@ class Menu:
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
         x = 80
         _blit_text(self.title_font, "Hangi sahneyi açalım?", TITLE_COLOR, x, 50, h)
-        for i, ((y, _), item) in enumerate(zip(self._layout(len(items)), items)):
+        for i, y in self._layout(len(items)):
+            item = items[i]
             name, detail = _label(item)
             sel = i == selected
-            prefix = ">  " if sel else "   "
-            tw, _ = _blit_text(self.item_font, f"{prefix}{i + 1}.  {name}",
-                               SELECTED_COLOR if sel else TEXT_COLOR, x, y, h)
+            thumb = self._thumbs.get(item)
+            if thumb:
+                _blit_image(thumb[0], thumb[1], thumb[2], x + 30, y, h)
+            tx = x + 30 + self.THUMB_W + 28
+            color = SELECTED_COLOR if sel else TEXT_COLOR
+            _blit_text(self.item_font, f"{'>' if sel else ' '}", color, x, y + 20, h)
+            _blit_text(self.item_font, f"{i + 1}.  {name}", color, tx, y + 14, h)
             if detail:
-                _blit_text(self.small_font, detail, DIM_COLOR, x + tw + 24, y + 8, h)
+                _blit_text(self.small_font, detail, DIM_COLOR, tx, y + 58, h)
+        if len(items) > self._visible_rows():
+            _blit_text(self.small_font, f"{selected + 1} / {len(items)}", DIM_COLOR, w - 120, 60, h)
         _blit_text(self.small_font,
                    "Yukarı/Aşağı veya fare: seç    Enter / tık: aç    1-9: doğrudan    F: tam ekran    ESC: çıkış",
                    DIM_COLOR, x, h - 60, h)
@@ -104,8 +143,8 @@ class Menu:
 
     def _item_at(self, items, pos):
         mx, my = pos
-        for i, (y, row_h) in enumerate(self._layout(len(items))):
-            if y - 8 <= my < y - 8 + row_h and mx >= 40:
+        for i, y in self._layout(len(items)):
+            if y <= my < y + self.ROW_H and mx >= 40:
                 return i
         return None
 
@@ -115,12 +154,15 @@ class Menu:
         :return: seçilen öğe (dosya yolu veya NO_MODEL) ya da çıkış istendiyse False
         """
         clock = pygame.time.Clock()
+        self._keep_visible(selected, len(items))
         while True:
             for e in pygame.event.get():
                 if e.type == QUIT:
                     return False
                 if e.type == VIDEORESIZE:
                     self.renderer.resize((e.w, e.h))
+                elif e.type == MOUSEWHEEL:
+                    self._scroll = max(0, min(self._scroll - e.y, max(0, len(items) - self._visible_rows())))
                 elif e.type == KEYDOWN:
                     if e.key in (K_ESCAPE, K_q):
                         return False
@@ -142,6 +184,7 @@ class Menu:
                     i = self._item_at(items, e.pos)
                     if i is not None:
                         return items[i]
+            self._keep_visible(selected, len(items))
             self._draw(items, selected)
             clock.tick(30)
 
@@ -210,10 +253,13 @@ class Menu:
             pygame.display.flip()
             clock.tick(30)
 
-    def show_loading(self, item):
+    def show_loading(self, item, text=None):
         """Model yüklenirken (birkaç saniye sürebilir) bilgi ekranı."""
         w, h = self.renderer.size
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
-        _blit_text(self.title_font, f"{_label(item)[0]} yükleniyor...", TITLE_COLOR, 80, h // 2 - 40, h)
+        glEnable(GL_BLEND)
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+        _blit_text(self.title_font, text or "Yükleniyor...", TITLE_COLOR, 80, h // 2 - 70, h)
+        _blit_text(self.item_font, _label(item)[0], TEXT_COLOR, 80, h // 2, h)
         pygame.display.flip()
         pygame.event.pump()

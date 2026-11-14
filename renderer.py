@@ -7,6 +7,7 @@ Model varsa (--model): dokulu 3B sahne; ekran bir pencere gibi davranır.
 import json
 import os
 
+import numpy as np
 import pygame
 from pygame.locals import DOUBLEBUF, OPENGL, RESIZABLE
 from OpenGL.GL import (
@@ -27,6 +28,7 @@ from OpenGL.GL import (
     GL_REPEAT, GL_GENERATE_MIPMAP, GL_UNPACK_ALIGNMENT, GL_VERTEX_ARRAY,
     GL_NORMAL_ARRAY, GL_TEXTURE_COORD_ARRAY, GL_COLOR_ARRAY, GL_FLOAT,
     GL_UNSIGNED_INT, glClipPlane, GL_CLIP_PLANE0, glDeleteLists, glDeleteTextures,
+    glReadPixels, glReadBuffer, GL_RGB, GL_BACK,
 )
 
 from model_loader import load_model, model_bounds
@@ -276,8 +278,8 @@ class Renderer:
         glDisable(GL_LIGHTING)
         glDisable(GL_DEPTH_TEST)
 
-    def draw(self, eye, dt=0.0):
-        """eye: ekran merkezine göre (ex, ey, ez) cm."""
+    def draw(self, eye, dt=0.0, present=True):
+        """eye: ekran merkezine göre (ex, ey, ez) cm. present=False: ekrana basmaz (grab_frame için)."""
         self.angle += 25.0 * dt
         l, r, b, t, n, f = off_axis_frustum(eye, NEAR, FAR, self.screen_w, self.screen_h)
 
@@ -301,4 +303,15 @@ class Renderer:
             _draw_cube((0.0, 0.0, 0.0), 8.0)
             glPopMatrix()
 
-        pygame.display.flip()
+        if present:
+            pygame.display.flip()
+
+    def grab_frame(self):
+        """
+        Son çizilen kareyi (draw(..., present=False) sonrası, flip'ten ÖNCE) okur.
+        :return: (yükseklik, genişlik, 3) uint8 RGB dizisi, üstten aşağı satırlarla
+        """
+        w, h = self.size
+        glReadBuffer(GL_BACK)
+        data = glReadPixels(0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE)
+        return np.flipud(np.frombuffer(data, dtype=np.uint8).reshape(h, w, 3))

@@ -137,9 +137,11 @@ def main():
         if not settings_existed and not open_settings():
             quit_early()
             return
-        if models and not pick_and_load(None):
-            quit_early()
-            return
+        if models:
+            menu.prepare_previews(menu_items)
+            if not pick_and_load(None):
+                quit_early()
+                return
     clock = pygame.time.Clock()
     filt = OneEuroFilter(FILTER_MIN_CUTOFF, FILTER_BETA)
     smooth = 1.0          # +/- ile değişen yumuşatma çarpanı (min_cutoff'a bölünür)
