@@ -13,6 +13,7 @@ Tuşlar:
   M              Sahne seçim menüsüne dön
   P              Ayarlar (ekran boyutu, kamera konumu, göz mesafesi)
   K              Mesafe kalibrasyonu (kamera varken)
+  V              Video kaydı aç/kapa (sahne + kamera yan yana, kayitlar/ klasörüne)
 
 Açılışta proje klasöründeki modeller (.glb/.gltf/.obj) listelenir ve seçim istenir.
 --model verilirse menü atlanır.
@@ -35,7 +36,7 @@ import pygame
 from pygame.locals import (QUIT, KEYDOWN, VIDEORESIZE, K_ESCAPE, K_q, K_f, K_h,
                            K_LEFT, K_RIGHT, K_UP, K_DOWN, K_r, K_MINUS, K_PLUS,
                            K_EQUALS, K_KP_MINUS, K_KP_PLUS, K_l, K_c, K_PAGEUP,
-                           K_PAGEDOWN, K_w, K_s, K_a, K_d, K_t, K_g, K_m, K_p, K_k)
+                           K_PAGEDOWN, K_w, K_s, K_a, K_d, K_t, K_g, K_m, K_p, K_k, K_v)
 
 from head_tracker import HeadTracker
 from tracker_thread import TrackerThread
@@ -47,6 +48,7 @@ from settings import Settings, nearest_aspect_index, ASPECT_PRESETS
 from renderer import Renderer
 from menu import Menu, find_models, NO_MODEL, SETTINGS_ITEM, CALIBRATION_ITEM
 from calibration import run_calibration
+from recorder import Recorder
 
 FRAME_W, FRAME_H = 640, 480
 # One Euro filtre ayarları, bileşen başına (x_n, y_n, z_cm).
@@ -152,6 +154,8 @@ def main():
     cam_offset = settings.cam_offset_y_cm()
     hud = True
 
+    recorder = Recorder()
+    last_saved = None     # son kaydedilen video yolu (başlıkta gösterilir)
     eye = (0.0, cam_offset, NEUTRAL_Z_CM)
     running = True
     try:
@@ -182,6 +186,14 @@ def main():
                         if tracker:
                             tracker.tracker.real_ipd_cm = settings.ipd_cm
                         clock.tick()
+                    elif k == K_v:
+                        if recorder.active:
+                            last_saved = recorder.stop()
+                            print(f"[KAYIT] Kaydedildi: {last_saved}  "
+                                  f"({recorder.written / 30:.1f} sn, {recorder.dropped} kare atlandı)")
+                        else:
+                            print("[KAYIT] Başladı:", recorder.start())
+                            last_saved = None
                     elif k == K_k and tracker:
                         if not calibrate():
                             running = False
@@ -241,13 +253,27 @@ def main():
                     x_n, y_n, z = filt.predict(time.monotonic(), PREDICT_HORIZON_S, PREDICT_AXES)
                 eye = head_to_eye_cm(x_n, y_n, z, FRAME_W, FRAME_H, focal_px, cam_offset)
 
-            renderer.draw(eye, dt)
+            if recorder.active:
+                # Kare, ekrana basılmadan ÖNCE okunur (flip sonrası arka tampon tanımsız)
+                renderer.draw(eye, dt, present=False)
+                if recorder.due():
+                    cam_frame, cam_pose = tracker.latest_frame() if tracker else (None, None)
+                    if cam_pose is not None and time.monotonic() - tracker.latest_measurement()[1] > 0.5:
+                        cam_pose = None   # yüz kaybolmuş: eski göz işaretlerini gösterme
+                    recorder.capture(renderer.grab_frame(), cam_frame, cam_pose, eye[2])
+                pygame.display.flip()
+            else:
+                renderer.draw(eye, dt)
 
             if hud:
+                rec = f" | REC {recorder.elapsed():.0f}s" if recorder.active else (
+                    f" | kaydedildi: {os.path.basename(last_saved)}" if last_saved else "")
                 pygame.display.set_caption(
                     f"Parallaks | {clock.get_fps():.0f} FPS | {status} | "
-                    f"Z={eye[2]:.0f}cm | f={focal_mult:.2f} off={cam_offset:.1f} yum={smooth:.2f}")
+                    f"Z={eye[2]:.0f}cm | f={focal_mult:.2f} off={cam_offset:.1f} yum={smooth:.2f}{rec}")
     finally:
+        if recorder.active:
+            print("[KAYIT] Kaydedildi:", recorder.stop())
         renderer.save_view()
         if tracker:
             tracker.stop()
