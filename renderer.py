@@ -30,7 +30,7 @@ from OpenGL.GL import (
 )
 
 from model_loader import load_model, model_bounds
-from off_axis import off_axis_frustum, SCREEN_W_CM, SCREEN_H_CM
+from off_axis import off_axis_frustum, SCREEN_W_CM, SCREEN_H_CM   # varsayılan ekran boyutu
 
 ROOM_DEPTH_CM = 40.0
 GRID_STEPS = 8            # duvarlardaki derinlik çizgisi sayısı
@@ -46,8 +46,8 @@ def _line(a, b):
     glVertex3f(*b)
 
 
-def _draw_room():
-    w, h, d = SCREEN_W_CM / 2.0, SCREEN_H_CM / 2.0, ROOM_DEPTH_CM
+def _draw_room(screen_w, screen_h):
+    w, h, d = screen_w / 2.0, screen_h / 2.0, ROOM_DEPTH_CM
     glBegin(GL_LINES)
     # Duvar kenarları (ekrandan arka duvara)
     glColor4f(0.1, 0.8, 1.0, 1.0)
@@ -156,6 +156,8 @@ class Renderer:
         glEnable(GL_LINE_SMOOTH)
         glLineWidth(1.8)
         self.angle = 0.0
+        self.screen_w, self.screen_h = SCREEN_W_CM, SCREEN_H_CM   # fiziksel ekran (cm); set_screen() ile değişir
+        self._ext = None            # yüklü modelin boyutları (ölçek hesabı için)
 
         self.model_list = None
         self.model_path = None
@@ -185,14 +187,25 @@ class Renderer:
         lo, hi = model_bounds(parts)
         self._center = (lo + hi) / 2.0
         self._half_depth = float(hi[2] - lo[2]) / 2.0
-        ext = [max(float(e), 1e-9) for e in (hi - lo)]
-        self._fit_scale = min(SCREEN_W_CM / ext[0], SCREEN_H_CM / ext[1])
-        self._cover_scale = max(SCREEN_W_CM / ext[0], SCREEN_H_CM / ext[1])
+        self._ext = [max(float(e), 1e-9) for e in (hi - lo)]
+        self._update_scales()
         self.model_list, self._textures = _compile_model(parts)
         self.model_path = model_path
         self._view_path = os.path.splitext(model_path)[0] + ".view.json"
         self._load_view()
         self.show_room = False  # model varken tel kafes çizgiler gizli (L ile açılır)
+
+    def set_screen(self, width_cm, height_cm):
+        """Fiziksel ekran boyutunu ayarlar (cm); oda çizgileri, model ölçeği ve frustum buna uyar."""
+        self.screen_w, self.screen_h = float(width_cm), float(height_cm)
+        self._update_scales()
+
+    def _update_scales(self):
+        if self._ext is None:
+            return
+        ex, ey = self._ext[0], self._ext[1]
+        self._fit_scale = min(self.screen_w / ex, self.screen_h / ey)
+        self._cover_scale = max(self.screen_w / ex, self.screen_h / ey)
 
     def unload_model(self):
         if self.model_list is not None:
@@ -201,6 +214,7 @@ class Renderer:
             glDeleteTextures(self._textures)
         self.model_list, self._textures = None, []
         self.model_path = self._view_path = None
+        self._ext = None
 
     def reset_view(self):
         for k, v in VIEW_DEFAULTS.items():
@@ -265,7 +279,7 @@ class Renderer:
     def draw(self, eye, dt=0.0):
         """eye: ekran merkezine göre (ex, ey, ez) cm."""
         self.angle += 25.0 * dt
-        l, r, b, t, n, f = off_axis_frustum(eye, NEAR, FAR)
+        l, r, b, t, n, f = off_axis_frustum(eye, NEAR, FAR, self.screen_w, self.screen_h)
 
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
         glMatrixMode(GL_PROJECTION)
@@ -277,7 +291,7 @@ class Renderer:
         glTranslatef(-eye[0], -eye[1], -eye[2])   # kamera ötelenir, DÖNMEZ
 
         if self.show_room:
-            _draw_room()
+            _draw_room(self.screen_w, self.screen_h)
         if self.model_list is not None:
             self._draw_model()
         else:

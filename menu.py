@@ -10,13 +10,17 @@ import os
 
 import pygame
 from pygame.locals import (QUIT, KEYDOWN, MOUSEMOTION, MOUSEBUTTONDOWN, VIDEORESIZE,
-                           K_ESCAPE, K_q, K_UP, K_DOWN, K_RETURN, K_KP_ENTER, K_SPACE, K_f)
+                           K_ESCAPE, K_q, K_UP, K_DOWN, K_LEFT, K_RIGHT, K_RETURN, K_KP_ENTER,
+                           K_SPACE, K_f, KMOD_SHIFT)
+
+from settings import ASPECT_PRESETS, nearest_aspect_index
 from OpenGL.GL import (glClear, glClearColor, glWindowPos2d, glDrawPixels, glEnable,
                        glBlendFunc, GL_COLOR_BUFFER_BIT, GL_DEPTH_BUFFER_BIT, GL_RGBA,
                        GL_UNSIGNED_BYTE, GL_BLEND, GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
 
 MODEL_PATTERNS = ("*.glb", "*.gltf", "*.obj")
 NO_MODEL = None  # menüde "model yok" (tel kafes oda) seçeneği
+SETTINGS_ITEM = "<ayarlar>"  # menüde ayarlar ekranını açan öğe
 
 TITLE_COLOR = (120, 220, 255)
 TEXT_COLOR = (215, 215, 225)
@@ -41,6 +45,8 @@ def pretty_name(path):
 def _label(path):
     if path is NO_MODEL:
         return "Tel kafes oda (model yok)", ""
+    if path == SETTINGS_ITEM:
+        return "Ayarlar", "ekran boyutu, kamera konumu"
     size_mb = os.path.getsize(path) / (1024 * 1024)
     return pretty_name(path), f"{os.path.basename(path)}  ·  {size_mb:.0f} MB"
 
@@ -128,6 +134,71 @@ class Menu:
                     if i is not None:
                         return items[i]
             self._draw(items, selected)
+            clock.tick(30)
+
+    def edit_settings(self, settings):
+        """
+        Ayarlar ekranı: ↑/↓ alan seç, ←/→ değiştir (Shift: büyük adım), Enter/ESC bitir.
+        settings (Settings) yerinde değiştirilir.
+        :return: False ise pencere kapatıldı (çıkış istendi), aksi halde True
+        """
+        fields = [
+            ("Ekran çapı", lambda: f'{settings.diagonal_in:.1f}"'),
+            ("En/boy oranı", lambda: ASPECT_PRESETS[nearest_aspect_index(settings.aspect)][0]),
+            ("Kamera, ekranın üst kenarının ne kadar üstünde", lambda: f"{settings.cam_gap_cm:.1f} cm"),
+            ("Göz bebekleri arası mesafe", lambda: f"{settings.ipd_cm:.1f} cm"),
+        ]
+
+        def change(i, direction, big):
+            if i == 0:
+                settings.diagonal_in += direction * (1.0 if big else 0.1)
+            elif i == 1:
+                idx = (nearest_aspect_index(settings.aspect) + direction) % len(ASPECT_PRESETS)
+                settings.aspect = ASPECT_PRESETS[idx][1]
+            elif i == 2:
+                settings.cam_gap_cm += direction * (1.0 if big else 0.5)
+            elif i == 3:
+                settings.ipd_cm += direction * (0.5 if big else 0.1)
+            for name in ("diagonal_in", "cam_gap_cm", "ipd_cm"):   # kayan nokta birikmesini engelle
+                setattr(settings, name, round(getattr(settings, name), 1))
+            settings.clamp()
+
+        sel = 0
+        clock = pygame.time.Clock()
+        while True:
+            for e in pygame.event.get():
+                if e.type == QUIT:
+                    return False
+                if e.type == VIDEORESIZE:
+                    self.renderer.resize((e.w, e.h))
+                elif e.type == KEYDOWN:
+                    if e.key in (K_ESCAPE, K_RETURN, K_KP_ENTER):
+                        return True
+                    elif e.key == K_UP:
+                        sel = (sel - 1) % len(fields)
+                    elif e.key == K_DOWN:
+                        sel = (sel + 1) % len(fields)
+                    elif e.key in (K_LEFT, K_RIGHT):
+                        change(sel, 1 if e.key == K_RIGHT else -1, bool(e.mod & KMOD_SHIFT))
+            w, h = self.renderer.size
+            glClearColor(0.02, 0.02, 0.06, 1.0)
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+            glEnable(GL_BLEND)
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+            _blit_text(self.title_font, "Ayarlar", TITLE_COLOR, 80, 50, h)
+            for i, (name, value) in enumerate(fields):
+                y = 150 + i * 62
+                color = SELECTED_COLOR if i == sel else TEXT_COLOR
+                tw, _ = _blit_text(self.item_font, f"{'>' if i == sel else ' '}  {name}:", color, 80, y, h)
+                _blit_text(self.item_font, value(), color, 80 + tw + 24, y, h)
+            sw, sh = settings.screen_cm()
+            _blit_text(self.small_font, f"Hesaplanan ekran boyutu: {sw:.1f} x {sh:.1f} cm   "
+                                        f"(kamera ekran merkezinin {settings.cam_offset_y_cm():.1f} cm üstünde)",
+                       DIM_COLOR, 80, 150 + len(fields) * 62 + 20, h)
+            _blit_text(self.small_font,
+                       "Yukarı/Aşağı: alan seç    Sol/Sağ: değiştir (Shift: büyük adım)    Enter / ESC: kaydet ve dön",
+                       DIM_COLOR, 80, h - 60, h)
+            pygame.display.flip()
             clock.tick(30)
 
     def show_loading(self, item):

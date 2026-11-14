@@ -11,6 +11,7 @@ Tuşlar:
   R              Kalibrasyonu (ve model görünümünü) varsayılana döndür
 
   M              Sahne seçim menüsüne dön
+  P              Ayarlar (ekran boyutu, kamera konumu, göz mesafesi)
 
 Açılışta proje klasöründeki modeller (.glb/.gltf/.obj) listelenir ve seçim istenir.
 --model verilirse menü atlanır.
@@ -33,19 +34,19 @@ import pygame
 from pygame.locals import (QUIT, KEYDOWN, VIDEORESIZE, K_ESCAPE, K_q, K_f, K_h,
                            K_LEFT, K_RIGHT, K_UP, K_DOWN, K_r, K_MINUS, K_PLUS,
                            K_EQUALS, K_KP_MINUS, K_KP_PLUS, K_l, K_c, K_PAGEUP,
-                           K_PAGEDOWN, K_w, K_s, K_a, K_d, K_t, K_g, K_m)
+                           K_PAGEDOWN, K_w, K_s, K_a, K_d, K_t, K_g, K_m, K_p)
 
 from head_tracker import HeadTracker
 from tracker_thread import TrackerThread
 import time
 
 from signal_filter import PoseNormalizer, OneEuroFilter
-from off_axis import head_to_eye_cm, CAMERA_OFFSET_Y_CM
+from off_axis import head_to_eye_cm
+from settings import Settings, nearest_aspect_index, ASPECT_PRESETS
 from renderer import Renderer
-from menu import Menu, find_models, NO_MODEL
+from menu import Menu, find_models, NO_MODEL, SETTINGS_ITEM
 
 FRAME_W, FRAME_H = 640, 480
-DEFAULT_FOCAL_MULT = 0.85
 # One Euro filtre ayarları, bileşen başına (x_n, y_n, z_cm).
 # Ölçüm: Z (IPD'den) kare başına ~1.2 cm gürültülü, X/Y ise <1 piksel -> Z daha güçlü filtrelenir.
 FILTER_MIN_CUTOFF = (1.0, 1.0, 0.3)   # Hz; düşük = daha pürüzsüz, daha gecikmeli
@@ -67,15 +68,36 @@ def main():
         model_path = sys.argv[i + 1]
     renderer = Renderer()
     menu = Menu(renderer)
+    try:   # ayar dosyası yokken en-boy oranı için masaüstü çözünürlüğünü kullan
+        dw, dh = pygame.display.get_desktop_sizes()[0]
+        default_aspect = ASPECT_PRESETS[nearest_aspect_index(dw / dh)][1]
+    except Exception:
+        default_aspect = 16 / 9
+    settings, settings_existed = Settings.load(default_aspect=default_aspect)
+    renderer.set_screen(*settings.screen_cm())
     models = find_models(os.path.dirname(os.path.abspath(__file__)))
-    menu_items = models + [NO_MODEL]
+    menu_items = models + [NO_MODEL, SETTINGS_ITEM]
+
+    def open_settings():
+        """Ayarlar ekranını açar, kaydeder ve uygular. :return: False ise çıkış istendi."""
+        ok = menu.edit_settings(settings)
+        settings.save()
+        renderer.set_screen(*settings.screen_cm())
+        return ok
 
     def pick_and_load(current):
         """Menüyü gösterir, seçilen modeli yükler. :return: False ise çıkış istendi."""
         start = menu_items.index(current) if current in menu_items else 0
-        choice = menu.choose(menu_items, start)
-        if choice is False:
-            return False
+        while True:
+            choice = menu.choose(menu_items, start)
+            if choice is False:
+                return False
+            if choice == SETTINGS_ITEM:
+                if not open_settings():
+                    return False
+                start = menu_items.index(SETTINGS_ITEM)
+                continue
+            break
         if choice is not NO_MODEL:
             menu.show_loading(choice)
         renderer.load_model(choice)
@@ -83,22 +105,27 @@ def main():
 
     if model_path is not None:
         renderer.load_model(model_path)
-    elif models and not pick_and_load(None):
-        pygame.quit()
-        return
+    else:
+        # İlk açılışta (ayar dosyası yok) ekran boyutunu soruyoruz
+        if not settings_existed and not open_settings():
+            pygame.quit()
+            return
+        if models and not pick_and_load(None):
+            pygame.quit()
+            return
     clock = pygame.time.Clock()
     filt = OneEuroFilter(FILTER_MIN_CUTOFF, FILTER_BETA)
     smooth = 1.0          # +/- ile değişen yumuşatma çarpanı (min_cutoff'a bölünür)
     last_seq = -1
     normalizer = PoseNormalizer(FRAME_W, FRAME_H)
 
-    focal_mult = DEFAULT_FOCAL_MULT
-    cam_offset = CAMERA_OFFSET_Y_CM
+    focal_mult = settings.focal_mult
+    cam_offset = settings.cam_offset_y_cm()
     hud = True
 
     tracker = None
     if not use_mouse:
-        tracker = TrackerThread(HeadTracker(width=FRAME_W, height=FRAME_H))
+        tracker = TrackerThread(HeadTracker(width=FRAME_W, height=FRAME_H, real_ipd_cm=settings.ipd_cm))
         tracker.start()
 
     eye = (0.0, cam_offset, NEUTRAL_Z_CM)
@@ -124,6 +151,13 @@ def main():
                         smooth = max(0.25, smooth / 1.25)   # daha hızlı tepki
                     elif k in (K_MINUS, K_KP_MINUS):
                         smooth = min(8.0, smooth * 1.25)    # daha pürüzsüz
+                    elif k == K_p:
+                        if not open_settings():
+                            running = False
+                        cam_offset = settings.cam_offset_y_cm()
+                        if tracker:
+                            tracker.tracker.real_ipd_cm = settings.ipd_cm
+                        clock.tick()
                     elif k == K_m:
                         if not pick_and_load(renderer.model_path):
                             running = False
@@ -139,7 +173,7 @@ def main():
                     elif k == K_PAGEUP: renderer.model_scale *= 1.1
                     elif k == K_PAGEDOWN: renderer.model_scale /= 1.1
                     elif k == K_r:
-                        focal_mult, cam_offset = DEFAULT_FOCAL_MULT, CAMERA_OFFSET_Y_CM
+                        focal_mult, cam_offset = settings.focal_mult, settings.cam_offset_y_cm()
                         smooth = 1.0
                         renderer.reset_view()
 

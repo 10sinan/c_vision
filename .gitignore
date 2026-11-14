@@ -4,3 +4,4 @@ venv/
 *.glb
 *.gltf
 *.view.json
+settings.json
