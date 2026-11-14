@@ -3,3 +3,5 @@ mediapipe<1.0
 pygame-ce
 PyOpenGL
 numpy
+trimesh
+scipy

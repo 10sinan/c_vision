@@ -8,16 +8,20 @@ Tuşlar:
   Sol / Sağ      Odak uzaklığı çarpanı  -/+ 0.05  (derinlik/yan ölçeği)
   Aşağı / Yukarı Kamera ofseti (ekran merkezinden yukarı) -/+ 0.5 cm
   - / +          EMA alpha -/+ 0.05
+  PageUp/PageDn  Model boyutu +/- %10 (--model ile)
+  L              Oda çizgilerini aç/kapat
   R              Kalibrasyonu varsayılana döndür
 
 Kamerasız test: python main.py --mouse
+3B model:       python main.py --model araba.glb   (.obj / .glb / .gltf)
 """
 
 import sys
 import pygame
 from pygame.locals import (QUIT, KEYDOWN, VIDEORESIZE, K_ESCAPE, K_q, K_f, K_h,
                            K_LEFT, K_RIGHT, K_UP, K_DOWN, K_r, K_MINUS, K_PLUS,
-                           K_EQUALS, K_KP_MINUS, K_KP_PLUS)
+                           K_EQUALS, K_KP_MINUS, K_KP_PLUS, K_l, K_PAGEUP,
+                           K_PAGEDOWN)
 
 from head_tracker import HeadTracker
 from tracker_thread import TrackerThread
@@ -35,7 +39,13 @@ RETURN_RATE = 0.03            # kare başına merkeze yaklaşma oranı
 
 def main():
     use_mouse = "--mouse" in sys.argv
-    renderer = Renderer()
+    model_path = None
+    if "--model" in sys.argv:
+        i = sys.argv.index("--model")
+        if i + 1 >= len(sys.argv):
+            sys.exit("Kullanım: python main.py --model dosya.glb")
+        model_path = sys.argv[i + 1]
+    renderer = Renderer(model_path=model_path)
     clock = pygame.time.Clock()
     ema = EMAFilter(alpha=DEFAULT_ALPHA)
     normalizer = PoseNormalizer(FRAME_W, FRAME_H)
@@ -72,9 +82,13 @@ def main():
                         ema.alpha = min(1.0, ema.alpha + 0.05)
                     elif k in (K_MINUS, K_KP_MINUS):
                         ema.alpha = max(0.05, ema.alpha - 0.05)
+                    elif k == K_l: renderer.show_room = not renderer.show_room
+                    elif k == K_PAGEUP: renderer.model_scale *= 1.1
+                    elif k == K_PAGEDOWN: renderer.model_scale /= 1.1
                     elif k == K_r:
                         focal_mult, cam_offset = DEFAULT_FOCAL_MULT, CAMERA_OFFSET_Y_CM
                         ema.alpha = DEFAULT_ALPHA
+                        renderer.model_scale = 1.0
 
             focal_px = FRAME_W * focal_mult
             status = "takip"
