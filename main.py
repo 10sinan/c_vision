@@ -10,6 +10,7 @@ Tuşlar:
   - / +          EMA alpha -/+ 0.05
   PageUp/PageDn  Model boyutu +/- %10 (--model ile)
   L              Oda çizgilerini aç/kapat
+  C              Model: ekranı doldur / ekrana sığdır
   R              Kalibrasyonu varsayılana döndür
 
 Kamerasız test: python main.py --mouse
@@ -20,7 +21,7 @@ import sys
 import pygame
 from pygame.locals import (QUIT, KEYDOWN, VIDEORESIZE, K_ESCAPE, K_q, K_f, K_h,
                            K_LEFT, K_RIGHT, K_UP, K_DOWN, K_r, K_MINUS, K_PLUS,
-                           K_EQUALS, K_KP_MINUS, K_KP_PLUS, K_l, K_PAGEUP,
+                           K_EQUALS, K_KP_MINUS, K_KP_PLUS, K_l, K_c, K_PAGEUP,
                            K_PAGEDOWN)
 
 from head_tracker import HeadTracker
@@ -83,6 +84,7 @@ def main():
                     elif k in (K_MINUS, K_KP_MINUS):
                         ema.alpha = max(0.05, ema.alpha - 0.05)
                     elif k == K_l: renderer.show_room = not renderer.show_room
+                    elif k == K_c: renderer.cover = not renderer.cover
                     elif k == K_PAGEUP: renderer.model_scale *= 1.1
                     elif k == K_PAGEDOWN: renderer.model_scale /= 1.1
                     elif k == K_r:
