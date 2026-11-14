@@ -33,37 +33,53 @@ def model_bounds(parts):
 def load_gltf(path):
     import trimesh
     scene = trimesh.load(path)
-    # Sahne grafiğindeki dönüşümler uygulanmış, ayrı ayrı parçalar
-    meshes = scene.dump(concatenate=False) if isinstance(scene, trimesh.Scene) else [scene]
-    parts = []
-    for m in meshes:
-        if not isinstance(m, trimesh.Trimesh) or len(m.faces) == 0:
-            continue
-        part = {
-            "vertices": np.ascontiguousarray(m.vertices, dtype=np.float32),
-            "normals": np.ascontiguousarray(m.vertex_normals, dtype=np.float32),
-            "faces": np.ascontiguousarray(m.faces, dtype=np.uint32),
-            "uv": None, "image": None, "vcolors": None,
-            "color": np.array([0.8, 0.8, 0.85, 1.0], dtype=np.float32),
-        }
-        vis = m.visual
-        if vis.kind == "texture":
-            mat = vis.material
-            factor = getattr(mat, "baseColorFactor", None)
-            if factor is not None:
-                part["color"] = np.asarray(factor, dtype=np.float32) / 255.0
-            elif getattr(mat, "diffuse", None) is not None:
-                part["color"] = np.asarray(mat.diffuse, dtype=np.float32) / 255.0
-            image = getattr(mat, "baseColorTexture", None) or getattr(mat, "image", None)
-            if image is not None and vis.uv is not None and len(vis.uv) == len(m.vertices):
-                part["image"] = image
-                part["uv"] = np.ascontiguousarray(vis.uv, dtype=np.float32)
-        elif vis.kind in ("vertex", "face"):
-            part["vcolors"] = np.ascontiguousarray(vis.vertex_colors, dtype=np.float32) / 255.0
-        parts.append(part)
+    if isinstance(scene, trimesh.Trimesh):
+        instances = [(scene, np.eye(4))]
+    else:
+        # Sahne grafiğini kendimiz dolaşıyoruz: scene.dump() her parça için dokuları
+        # kopyalıyor ve büyük sahnelerde GB'larca bellek harcıyor.
+        instances = []
+        for node in scene.graph.nodes_geometry:
+            transform, geom_name = scene.graph[node]
+            instances.append((scene.geometry[geom_name], transform))
+    parts = [p for p in (_part_from_mesh(m, T) for m, T in instances) if p is not None]
     if not parts:
         raise ValueError(f"{path}: çizilebilir geometri bulunamadı.")
     return parts
+
+
+def _part_from_mesh(m, transform):
+    import trimesh
+    if not isinstance(m, trimesh.Trimesh) or len(m.faces) == 0:
+        return None
+    T = np.asarray(transform, dtype=np.float64)
+    verts = m.vertices @ T[:3, :3].T + T[:3, 3]
+    normals = m.vertex_normals @ np.linalg.inv(T[:3, :3])   # normal dönüşümü: (M^-1)^T
+    faces = np.asarray(m.faces)
+    if np.linalg.det(T[:3, :3]) < 0:                        # aynalama: üçgen yönünü düzelt
+        faces = faces[:, ::-1]
+    part = {
+        "vertices": np.ascontiguousarray(verts, dtype=np.float32),
+        "normals": np.ascontiguousarray(normals, dtype=np.float32),
+        "faces": np.ascontiguousarray(faces, dtype=np.uint32),
+        "uv": None, "image": None, "vcolors": None,
+        "color": np.array([0.8, 0.8, 0.85, 1.0], dtype=np.float32),
+    }
+    vis = m.visual
+    if vis.kind == "texture":
+        mat = vis.material
+        factor = getattr(mat, "baseColorFactor", None)
+        if factor is not None:
+            part["color"] = np.asarray(factor, dtype=np.float32) / 255.0
+        elif getattr(mat, "diffuse", None) is not None:
+            part["color"] = np.asarray(mat.diffuse, dtype=np.float32) / 255.0
+        image = getattr(mat, "baseColorTexture", None) or getattr(mat, "image", None)
+        if image is not None and vis.uv is not None and len(vis.uv) == len(m.vertices):
+            part["image"] = image
+            part["uv"] = np.ascontiguousarray(vis.uv, dtype=np.float32)
+    elif vis.kind in ("vertex", "face"):
+        part["vcolors"] = np.ascontiguousarray(vis.vertex_colors, dtype=np.float32) / 255.0
+    return part
 
 
 # --------------------------------------------------------------------------- OBJ

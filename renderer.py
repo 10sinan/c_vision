@@ -4,6 +4,9 @@ Model yoksa: ekranın arkasına uzanan tel kafes oda ve dönen küp.
 Model varsa (--model): dokulu 3B sahne; ekran bir pencere gibi davranır.
 """
 
+import json
+import os
+
 import pygame
 from pygame.locals import DOUBLEBUF, OPENGL, RESIZABLE
 from OpenGL.GL import (
@@ -23,7 +26,7 @@ from OpenGL.GL import (
     GL_LINEAR, GL_LINEAR_MIPMAP_LINEAR, GL_TEXTURE_WRAP_S, GL_TEXTURE_WRAP_T,
     GL_REPEAT, GL_GENERATE_MIPMAP, GL_UNPACK_ALIGNMENT, GL_VERTEX_ARRAY,
     GL_NORMAL_ARRAY, GL_TEXTURE_COORD_ARRAY, GL_COLOR_ARRAY, GL_FLOAT,
-    GL_UNSIGNED_INT,
+    GL_UNSIGNED_INT, glClipPlane, GL_CLIP_PLANE0,
 )
 
 from model_loader import load_model, model_bounds
@@ -34,6 +37,8 @@ GRID_STEPS = 8            # duvarlardaki derinlik çizgisi sayısı
 NEAR, FAR = 1.0, 2000.0
 MODEL_GAP_CM = 2.0        # modelin ön yüzü ekran camının bu kadar arkasında durur
 MAX_TEXTURE_PX = 2048     # bundan büyük dokular küçültülür
+# Model başına kaydedilen görünüm ayarları (<model>.view.json) ve varsayılanları
+VIEW_DEFAULTS = {"model_scale": 1.0, "cover": True, "depth": 0.0, "yaw": 0.0, "pitch": 0.0}
 
 
 def _line(a, b):
@@ -153,9 +158,17 @@ class Renderer:
 
         self.model_list = None
         self.show_room = True
-        self.model_scale = 1.0     # çalışırken PageUp/PageDown ile değişir
-        self.cover = True          # True: ekranı boşluksuz doldur (kenarlar kesilir), False: sığdır
+        # Görünüm ayarları (VIEW_DEFAULTS):
+        #   model_scale  boyut çarpanı
+        #   cover        True: ekranı boşluksuz doldur (kenarlar kesilir), False: sığdır
+        #   depth        sahneyi ekrana doğru (+) / uzağa (-) kaydırma, cm
+        #   yaw          sahneyi dikey eksen etrafında döndürme, derece
+        #   pitch        sahneyi öne/arkaya eğme, derece (+: üstten bakış)
+        self.reset_view()
+        self._view_path = None
         if model_path:
+            self._view_path = os.path.splitext(model_path)[0] + ".view.json"
+            self._load_view()
             parts = load_model(model_path)
             lo, hi = model_bounds(parts)
             self._center = (lo + hi) / 2.0
@@ -165,6 +178,27 @@ class Renderer:
             self._cover_scale = max(SCREEN_W_CM / ext[0], SCREEN_H_CM / ext[1])
             self.model_list = _compile_model(parts)
             self.show_room = False  # model varken tel kafes çizgiler gizli (L ile açılır)
+
+    def reset_view(self):
+        for k, v in VIEW_DEFAULTS.items():
+            setattr(self, k, v)
+
+    def _load_view(self):
+        try:
+            with open(self._view_path) as fh:
+                saved = json.load(fh)
+        except (OSError, ValueError):
+            return
+        for k in VIEW_DEFAULTS:
+            if k in saved:
+                setattr(self, k, type(VIEW_DEFAULTS[k])(saved[k]))
+
+    def save_view(self):
+        """Model görünüm ayarlarını <model>.view.json dosyasına yazar (bir dahaki açılışta yüklenir)."""
+        if self._view_path is None:
+            return
+        with open(self._view_path, "w") as fh:
+            json.dump({k: getattr(self, k) for k in VIEW_DEFAULTS}, fh, indent=2)
 
     def resize(self, size):
         self.size = size
@@ -185,14 +219,22 @@ class Renderer:
         glLightfv(GL_LIGHT0, GL_DIFFUSE, (0.75, 0.75, 0.75, 1.0))
         glLightfv(GL_LIGHT0, GL_AMBIENT, (0.45, 0.45, 0.5, 1.0))
 
+        # Ekran camının önünde kalan her şey kesilir (gerçek pencere gibi): z <= 0 tutulur.
+        # Düzlem şu anki (dünya) koordinatlarında tanımlanır.
+        glClipPlane(GL_CLIP_PLANE0, (0.0, 0.0, -1.0, 0.0))
+        glEnable(GL_CLIP_PLANE0)
+
         glPushMatrix()
         # Ön yüz ekran camının MODEL_GAP_CM arkasında, sahne ekranın ortasında
-        glTranslatef(0.0, 0.0, -MODEL_GAP_CM - self._half_depth * s)
+        glTranslatef(0.0, 0.0, -MODEL_GAP_CM - self._half_depth * s + self.depth)
+        glRotatef(self.pitch, 1.0, 0.0, 0.0)
+        glRotatef(self.yaw, 0.0, 1.0, 0.0)
         glScalef(s, s, s)
         glTranslatef(*(-self._center))
         glCallList(self.model_list)
         glPopMatrix()
 
+        glDisable(GL_CLIP_PLANE0)
         glDisable(GL_ALPHA_TEST)
         glDisable(GL_LIGHTING)
         glDisable(GL_DEPTH_TEST)

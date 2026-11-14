@@ -8,10 +8,15 @@ Tuşlar:
   Sol / Sağ      Odak uzaklığı çarpanı  -/+ 0.05  (derinlik/yan ölçeği)
   Aşağı / Yukarı Kamera ofseti (ekran merkezinden yukarı) -/+ 0.5 cm
   - / +          EMA alpha -/+ 0.05
-  PageUp/PageDn  Model boyutu +/- %10 (--model ile)
+  R              Kalibrasyonu (ve model görünümünü) varsayılana döndür
+
+Model tuşları (--model ile; ayarlar çıkışta <model>.view.json'a kaydedilir):
+  PageUp/PageDn  Boyut +/- %10
+  W / S          Sahneyi yaklaştır / uzaklaştır (2 cm)
+  A / D          Sahneyi sola / sağa döndür (5°)
+  T / G          Sahneyi üstten / alttan bakışa eğ (5°)
+  C              Ekranı doldur / ekrana sığdır
   L              Oda çizgilerini aç/kapat
-  C              Model: ekranı doldur / ekrana sığdır
-  R              Kalibrasyonu varsayılana döndür
 
 Kamerasız test: python main.py --mouse
 3B model:       python main.py --model araba.glb   (.obj / .glb / .gltf)
@@ -22,7 +27,7 @@ import pygame
 from pygame.locals import (QUIT, KEYDOWN, VIDEORESIZE, K_ESCAPE, K_q, K_f, K_h,
                            K_LEFT, K_RIGHT, K_UP, K_DOWN, K_r, K_MINUS, K_PLUS,
                            K_EQUALS, K_KP_MINUS, K_KP_PLUS, K_l, K_c, K_PAGEUP,
-                           K_PAGEDOWN)
+                           K_PAGEDOWN, K_w, K_s, K_a, K_d, K_t, K_g)
 
 from head_tracker import HeadTracker
 from tracker_thread import TrackerThread
@@ -85,12 +90,18 @@ def main():
                         ema.alpha = max(0.05, ema.alpha - 0.05)
                     elif k == K_l: renderer.show_room = not renderer.show_room
                     elif k == K_c: renderer.cover = not renderer.cover
+                    elif k == K_w: renderer.depth += 2.0
+                    elif k == K_s: renderer.depth -= 2.0
+                    elif k == K_a: renderer.yaw -= 5.0
+                    elif k == K_d: renderer.yaw += 5.0
+                    elif k == K_t: renderer.pitch += 5.0
+                    elif k == K_g: renderer.pitch -= 5.0
                     elif k == K_PAGEUP: renderer.model_scale *= 1.1
                     elif k == K_PAGEDOWN: renderer.model_scale /= 1.1
                     elif k == K_r:
                         focal_mult, cam_offset = DEFAULT_FOCAL_MULT, CAMERA_OFFSET_Y_CM
                         ema.alpha = DEFAULT_ALPHA
-                        renderer.model_scale = 1.0
+                        renderer.reset_view()
 
             focal_px = FRAME_W * focal_mult
             status = "takip"
@@ -125,6 +136,7 @@ def main():
                     f"Parallaks | {clock.get_fps():.0f} FPS | {status} | "
                     f"Z={eye[2]:.0f}cm | f={focal_mult:.2f} off={cam_offset:.1f} a={ema.alpha:.2f}")
     finally:
+        renderer.save_view()
         if tracker:
             tracker.stop()
         pygame.quit()
