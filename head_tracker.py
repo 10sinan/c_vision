@@ -136,18 +136,14 @@ class HeadTracker:
         if landmarks is None:
             return True, frame, None
 
-        # Sol/Sağ Göz Bebeği Landmark İndeksleri (468: Sol Iris, 473: Sağ Iris)
-        if len(landmarks) > 473:
-            left_eye_px = np.array([landmarks[468].x * w, landmarks[468].y * h])
-            right_eye_px = np.array([landmarks[473].x * w, landmarks[473].y * h])
-        else:
-            # Göz köşeleri fallback
-            l1 = np.array([landmarks[33].x * w, landmarks[33].y * h])
-            l2 = np.array([landmarks[133].x * w, landmarks[133].y * h])
-            r1 = np.array([landmarks[362].x * w, landmarks[362].y * h])
-            r2 = np.array([landmarks[263].x * w, landmarks[263].y * h])
-            left_eye_px = (l1 + l2) / 2.0
-            right_eye_px = (r1 + r2) / 2.0
+        # Göz merkezleri = göz köşelerinin ortası. Göz bebekleri (iris 468/473) kullanılmaz:
+        # kullanıcı ekranda başka yere bakınca kayarlar ve görüntüyü titretirler.
+        l1 = np.array([landmarks[33].x * w, landmarks[33].y * h])
+        l2 = np.array([landmarks[133].x * w, landmarks[133].y * h])
+        r1 = np.array([landmarks[362].x * w, landmarks[362].y * h])
+        r2 = np.array([landmarks[263].x * w, landmarks[263].y * h])
+        left_eye_px = (l1 + l2) / 2.0
+        right_eye_px = (r1 + r2) / 2.0
 
         # 1. Kafa Merkezi Piksel Koordinatları
         head_center_px = (left_eye_px + right_eye_px) / 2.0

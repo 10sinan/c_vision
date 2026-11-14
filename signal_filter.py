@@ -59,3 +59,60 @@ class EMAFilter:
 
     def reset(self):
         self.state = None
+
+
+class OneEuroFilter:
+    """
+    One Euro filtresi (Casiez ve ark., 2012) - hıza duyarlı alçak geçiren filtre.
+
+    Baş sabitken kesim frekansı düşük kalır -> titreme güçlü bastırılır.
+    Baş hızlandıkça kesim frekansı yükselir -> gecikme azalır.
+      fc = min_cutoff + beta * |filtrelenmiş hız|
+      alpha = 1 / (1 + 1 / (2*pi*fc*dt))
+
+    Vektör için bileşen bazında; min_cutoff ve beta bileşen başına ayrı verilebilir
+    (ör. Z derinliği X/Y'den daha gürültülü olduğu için daha güçlü filtrelenir).
+    update() yalnızca YENİ ölçümlerle ve ölçüm zaman damgasıyla çağrılmalıdır.
+    """
+
+    def __init__(self, min_cutoff, beta, d_cutoff=1.0):
+        self.min_cutoff = list(min_cutoff)
+        self.beta = list(beta)
+        self.d_cutoff = d_cutoff
+        self.state = None
+        self._dx = None
+        self._t = None
+
+    @staticmethod
+    def _alpha(cutoff, dt):
+        return 1.0 / (1.0 + 1.0 / (2.0 * math.pi * cutoff * dt))
+
+    def update(self, values, t):
+        values = tuple(values)
+        if self.state is None or self._t is None:
+            self.state, self._dx, self._t = values, (0.0,) * len(values), t
+            return self.state
+        dt = t - self._t
+        if dt <= 0:
+            return self.state
+        self._t = t
+        a_d = self._alpha(self.d_cutoff, dt)
+        new_state, new_dx = [], []
+        for i, (x, s, dx_prev) in enumerate(zip(values, self.state, self._dx)):
+            dx = a_d * ((x - s) / dt) + (1.0 - a_d) * dx_prev
+            fc = self.min_cutoff[i] + self.beta[i] * abs(dx)
+            a = self._alpha(fc, dt)
+            new_state.append(a * x + (1.0 - a) * s)
+            new_dx.append(dx)
+        self.state, self._dx = tuple(new_state), tuple(new_dx)
+        return self.state
+
+    def set_state(self, values, t=None):
+        """Filtre çıktısını doğrudan ayarlar (ör. yüz kaybolunca merkeze dönüş)."""
+        self.state = tuple(values)
+        self._dx = (0.0,) * len(self.state)
+        if t is not None:
+            self._t = t
+
+    def reset(self):
+        self.state = self._dx = self._t = None

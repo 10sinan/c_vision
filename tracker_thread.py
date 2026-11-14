@@ -15,6 +15,7 @@ class TrackerThread:
         self._lock = threading.Lock()
         self._pose = None          # en son ham poz
         self._stamp = 0.0          # en son yüz tespit zamanı
+        self._seq = 0              # her yeni pozda artar (yeni ölçüm tespiti için)
         self._running = False
         self._thread = None
         self.failed = False        # kamera akışı koptu mu
@@ -35,6 +36,7 @@ class TrackerThread:
                 with self._lock:
                     self._pose = pose
                     self._stamp = time.monotonic()
+                    self._seq += 1
 
     def latest(self):
         """:return: (pose | None, yüzün görüldüğü son zamandan beri geçen sn)"""
@@ -42,6 +44,11 @@ class TrackerThread:
             if self._pose is None:
                 return None, float("inf")
             return self._pose, time.monotonic() - self._stamp
+
+    def latest_measurement(self):
+        """:return: (pose | None, ölçüm zamanı (monotonic), sıra no)"""
+        with self._lock:
+            return self._pose, self._stamp, self._seq
 
     def stop(self):
         self._running = False

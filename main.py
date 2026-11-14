@@ -7,7 +7,7 @@ Tuşlar:
   H              HUD (pencere başlığında FPS/poz) aç/kapat
   Sol / Sağ      Odak uzaklığı çarpanı  -/+ 0.05  (derinlik/yan ölçeği)
   Aşağı / Yukarı Kamera ofseti (ekran merkezinden yukarı) -/+ 0.5 cm
-  - / +          EMA alpha -/+ 0.05
+  - / +          Titreme yumuşatma: daha pürüzsüz / daha hızlı tepki
   R              Kalibrasyonu (ve model görünümünü) varsayılana döndür
 
 Model tuşları (--model ile; ayarlar çıkışta <model>.view.json'a kaydedilir):
@@ -31,13 +31,18 @@ from pygame.locals import (QUIT, KEYDOWN, VIDEORESIZE, K_ESCAPE, K_q, K_f, K_h,
 
 from head_tracker import HeadTracker
 from tracker_thread import TrackerThread
-from signal_filter import PoseNormalizer, EMAFilter
+import time
+
+from signal_filter import PoseNormalizer, OneEuroFilter
 from off_axis import head_to_eye_cm, CAMERA_OFFSET_Y_CM
 from renderer import Renderer
 
 FRAME_W, FRAME_H = 640, 480
 DEFAULT_FOCAL_MULT = 0.85
-DEFAULT_ALPHA = 0.8
+# One Euro filtre ayarları, bileşen başına (x_n, y_n, z_cm).
+# Ölçüm: Z (IPD'den) kare başına ~1.2 cm gürültülü, X/Y ise <1 piksel -> Z daha güçlü filtrelenir.
+FILTER_MIN_CUTOFF = (1.0, 1.0, 0.3)   # Hz; düşük = daha pürüzsüz, daha gecikmeli
+FILTER_BETA = (3.0, 3.0, 0.05)        # hıza tepki; yüksek = hızlı harekette daha az gecikme
 NEUTRAL_Z_CM = 60.0
 FACE_LOST_TIMEOUT_S = 1.0     # bu süreden sonra merkeze dönüş başlar
 RETURN_RATE = 0.03            # kare başına merkeze yaklaşma oranı
@@ -53,7 +58,9 @@ def main():
         model_path = sys.argv[i + 1]
     renderer = Renderer(model_path=model_path)
     clock = pygame.time.Clock()
-    ema = EMAFilter(alpha=DEFAULT_ALPHA)
+    filt = OneEuroFilter(FILTER_MIN_CUTOFF, FILTER_BETA)
+    smooth = 1.0          # +/- ile değişen yumuşatma çarpanı (min_cutoff'a bölünür)
+    last_seq = -1
     normalizer = PoseNormalizer(FRAME_W, FRAME_H)
 
     focal_mult = DEFAULT_FOCAL_MULT
@@ -85,9 +92,9 @@ def main():
                     elif k == K_UP: cam_offset += 0.5
                     elif k == K_DOWN: cam_offset -= 0.5
                     elif k in (K_PLUS, K_EQUALS, K_KP_PLUS):
-                        ema.alpha = min(1.0, ema.alpha + 0.05)
+                        smooth = max(0.25, smooth / 1.25)   # daha hızlı tepki
                     elif k in (K_MINUS, K_KP_MINUS):
-                        ema.alpha = max(0.05, ema.alpha - 0.05)
+                        smooth = min(8.0, smooth * 1.25)    # daha pürüzsüz
                     elif k == K_l: renderer.show_room = not renderer.show_room
                     elif k == K_c: renderer.cover = not renderer.cover
                     elif k == K_w: renderer.depth += 2.0
@@ -100,33 +107,39 @@ def main():
                     elif k == K_PAGEDOWN: renderer.model_scale /= 1.1
                     elif k == K_r:
                         focal_mult, cam_offset = DEFAULT_FOCAL_MULT, CAMERA_OFFSET_Y_CM
-                        ema.alpha = DEFAULT_ALPHA
+                        smooth = 1.0
                         renderer.reset_view()
 
             focal_px = FRAME_W * focal_mult
             status = "takip"
+            filt.min_cutoff = [c / smooth for c in FILTER_MIN_CUTOFF]
 
             if use_mouse:
                 mx, my = pygame.mouse.get_pos()
                 w, h = renderer.size
                 raw = ((mx / w) * 2 - 1, 1 - (my / h) * 2, NEUTRAL_Z_CM)
-                ema.update(raw)
+                filt.update(raw, time.monotonic())
             else:
                 if tracker.failed:
                     break
                 # Aynı odak uzaklığı hem Z (derinlik) hem X/Y dönüşümünde kullanılır
                 tracker.tracker.focal_length_px = focal_px
-                pose, age = tracker.latest()
-                if pose is not None and age < FACE_LOST_TIMEOUT_S:
-                    ema.update(normalizer.normalize(pose))
+                pose, stamp, seq = tracker.latest_measurement()
+                now = time.monotonic()
+                if pose is not None and now - stamp < FACE_LOST_TIMEOUT_S:
+                    # Filtre yalnızca yeni kamera ölçümüyle (~30 Hz) ve ölçüm zamanıyla güncellenir;
+                    # aynı pozu her render karesinde tekrar beslemek titremeye yol açar.
+                    if seq != last_seq:
+                        last_seq = seq
+                        filt.update(normalizer.normalize(pose), stamp)
                 else:
                     status = "yuz yok"
-                    if ema.state is not None:
-                        ema.state = tuple(s + RETURN_RATE * (n - s) for s, n in
-                                          zip(ema.state, (0.0, 0.0, NEUTRAL_Z_CM)))
+                    if filt.state is not None:
+                        filt.set_state(tuple(s + RETURN_RATE * (n - s) for s, n in
+                                             zip(filt.state, (0.0, 0.0, NEUTRAL_Z_CM))))
 
-            if ema.state is not None:
-                x_n, y_n, z = ema.state
+            if filt.state is not None:
+                x_n, y_n, z = filt.state
                 eye = head_to_eye_cm(x_n, y_n, z, FRAME_W, FRAME_H, focal_px, cam_offset)
 
             renderer.draw(eye, dt)
@@ -134,7 +147,7 @@ def main():
             if hud:
                 pygame.display.set_caption(
                     f"Parallaks | {clock.get_fps():.0f} FPS | {status} | "
-                    f"Z={eye[2]:.0f}cm | f={focal_mult:.2f} off={cam_offset:.1f} a={ema.alpha:.2f}")
+                    f"Z={eye[2]:.0f}cm | f={focal_mult:.2f} off={cam_offset:.1f} yum={smooth:.2f}")
     finally:
         renderer.save_view()
         if tracker:
