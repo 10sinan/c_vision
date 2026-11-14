@@ -32,12 +32,13 @@ from OpenGL.GL import (
     GL_POINTS, GL_TRIANGLE_FAN, GL_POINT_SMOOTH, glPointSize, glPointParameterfv, glPointParameterf,
     GL_POINT_DISTANCE_ATTENUATION, GL_POINT_SIZE_MIN, GL_POINT_SIZE_MAX,
     GL_LIGHT1, GL_LIGHT_MODEL_AMBIENT, glLightModelfv, GL_SPECULAR, GL_FOG, GL_FOG_MODE, GL_LINEAR,
-    GL_FOG_START, GL_FOG_END, GL_FOG_COLOR, glFogi, glFogf, glFogfv,
+    GL_FOG_START, GL_FOG_END, GL_FOG_COLOR, glFogi, glFogf, glFogfv, glGetIntegerv, GL_VIEWPORT,
 )
 
 from model_loader import load_model, model_bounds
 from off_axis import off_axis_frustum, SCREEN_W_CM, SCREEN_H_CM   # varsayılan ekran boyutu
 from effects import Effects
+from shadows import Shadows
 
 ROOM_DEPTH_CM = 40.0
 GRID_STEPS = 8            # duvarlardaki derinlik çizgisi sayısı
@@ -46,13 +47,13 @@ MODEL_GAP_CM = 2.0        # modelin ön yüzü ekran camının bu kadar arkasın
 MAX_TEXTURE_PX = 2048     # bundan büyük dokular küçültülür
 # Model başına kaydedilen görünüm ayarları (<model>.view.json) ve varsayılanları
 VIEW_DEFAULTS = {"model_scale": 1.0, "cover": True, "depth": 0.0, "yaw": 0.0, "pitch": 0.0,
-                 "effects": True, "fx_density": 1.0, "look": 0}
+                 "effects": True, "fx_density": 1.0, "look": 0, "shadows": True}
 # Işık/sis ön ayarları (O tuşu). ambient: genel dolgu, key: ana ışık, fill: karşı yönden zayıf soğuk ışık,
 # fog: en uzak noktada sisin gücü (0 = sis yok). Sis derinlik ipucudur: uzak parçalar karanlık havaya karışır.
 LOOKS = (
-    {"name": "Doğal", "ambient": (0.32, 0.34, 0.40), "key": (0.85, 0.82, 0.72), "fill": (0.22, 0.28, 0.40), "fog": 0.6},
-    {"name": "Yumuşak", "ambient": (0.55, 0.55, 0.58), "key": (0.55, 0.55, 0.50), "fill": (0.15, 0.15, 0.20), "fog": 0.0},
-    {"name": "Dramatik", "ambient": (0.16, 0.18, 0.26), "key": (1.00, 0.92, 0.75), "fill": (0.10, 0.14, 0.25), "fog": 1.0},
+    {"name": "Doğal", "ambient": (0.32, 0.34, 0.40), "key": (0.85, 0.82, 0.72), "fill": (0.22, 0.28, 0.40), "fog": 0.6, "shadow": 0.70},
+    {"name": "Yumuşak", "ambient": (0.55, 0.55, 0.58), "key": (0.55, 0.55, 0.50), "fill": (0.15, 0.15, 0.20), "fog": 0.0, "shadow": 0.35},
+    {"name": "Dramatik", "ambient": (0.16, 0.18, 0.26), "key": (1.00, 0.92, 0.75), "fill": (0.10, 0.14, 0.25), "fog": 1.0, "shadow": 0.90},
 )
 # Dünyaya sabit ana ışık yönü (sağ, yukarı, kullanıcıya doğru); efektlerdeki yaprak gölgelendirmesiyle aynı
 KEY_LIGHT_DIR = (0.4, 0.9, 0.5)
@@ -130,6 +131,15 @@ def _compile_model(parts):
         if p["image"] is not None and id(p["image"]) not in textures:
             textures[id(p["image"])] = _upload_texture(p["image"])
 
+    # Dokusuz parçalar 1x1 beyaz doku kullanır: gölge shader'ı her parçada doku okur,
+    # sabit-fonksiyonlu hatta beyazla çarpmak rengi değiştirmez.
+    white = glGenTextures(1)
+    glBindTexture(GL_TEXTURE_2D, white)
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1)
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, b"\xff\xff\xff\xff")
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+
     lst = glGenLists(1)
     glNewList(lst, GL_COMPILE)
     glEnableClientState(GL_VERTEX_ARRAY)
@@ -146,7 +156,8 @@ def _compile_model(parts):
             glEnableClientState(GL_TEXTURE_COORD_ARRAY)
             glTexCoordPointer(2, GL_FLOAT, 0, p["uv"])
         else:
-            glDisable(GL_TEXTURE_2D)
+            glEnable(GL_TEXTURE_2D)
+            glBindTexture(GL_TEXTURE_2D, white)
         if p["vcolors"] is not None:
             glEnableClientState(GL_COLOR_ARRAY)
             glColorPointer(4, GL_FLOAT, 0, p["vcolors"])
@@ -159,7 +170,7 @@ def _compile_model(parts):
     glDisableClientState(GL_NORMAL_ARRAY)
     glDisableClientState(GL_VERTEX_ARRAY)
     glEndList()
-    return lst, list(textures.values())
+    return lst, list(textures.values()) + [white]
 
 
 class Renderer:
@@ -191,6 +202,7 @@ class Renderer:
         #   effects      ekrandan taşan yaprak/kelebek + toz efektleri açık mı
         #   fx_density   efekt yoğunluğu çarpanı
         self.fx = Effects(self.screen_w, self.screen_h)
+        self.sh = Shadows()   # GL bağlamı hazır; kullanılamıyorsa available=False
         self.reset_view()
         self._view_path = None
         if model_path:
@@ -210,6 +222,7 @@ class Renderer:
         self._center = (lo + hi) / 2.0
         self._half_depth = float(hi[2] - lo[2]) / 2.0
         self._ext = [max(float(e), 1e-9) for e in (hi - lo)]
+        self._diag = float(np.linalg.norm(hi - lo))
         self._update_scales()
         self.model_list, self._textures = _compile_model(parts)
         self.model_path = model_path
@@ -239,6 +252,7 @@ class Renderer:
         self.model_list, self._textures = None, []
         self.model_path = self._view_path = None
         self._ext = None
+        self.sh.key = None
 
     def reset_view(self):
         for k, v in VIEW_DEFAULTS.items():
@@ -271,8 +285,36 @@ class Renderer:
         self.size = size
         glViewport(0, 0, *size)
 
-    def _draw_model(self, eye_z=60.0):
+    def _model_geometry(self, s):
+        """Modeli dönüşümleriyle çizer (ana geçiş ve gölge haritası geçişi aynı yolu kullanır)."""
+        glPushMatrix()
+        # Ön yüz ekran camının MODEL_GAP_CM arkasında, sahne ekranın ortasında
+        glTranslatef(0.0, 0.0, -MODEL_GAP_CM - self._half_depth * s + self.depth)
+        glRotatef(self.pitch, 1.0, 0.0, 0.0)
+        glRotatef(self.yaw, 0.0, 1.0, 0.0)
+        glScalef(s, s, s)
+        glTranslatef(*(-self._center))
+        glCallList(self.model_list)
+        glPopMatrix()
+
+    def _bake_shadows_if_needed(self, s):
+        """Gölge haritası yalnızca model/görünüm değişince yeniden hesaplanır (ışık ve sahne sabit)."""
+        key = (self.model_path, self.model_list, round(s, 6), round(self.depth, 3), self.yaw, self.pitch)
+        if not self.sh.needs_bake(key):
+            return
+        center = (0.0, 0.0, -MODEL_GAP_CM - self._half_depth * s + self.depth)
+        radius = 0.5 * self._diag * s            # dönmeye karşı değişmeyen kapsayıcı küre
+        light_dir = np.asarray(KEY_LIGHT_DIR, dtype=float)
+        glMatrixMode(GL_MODELVIEW)
+        self.sh.bake(key, center, radius, light_dir, lambda: self._model_geometry(s),
+                     tuple(int(v) for v in glGetIntegerv(GL_VIEWPORT)))
+
+    def _draw_model(self, eye=(0.0, 0.0, 60.0)):
+        eye_z = eye[2]
         s = (self._cover_scale if self.cover else self._fit_scale) * self.model_scale
+        use_shadows = self.shadows and self.sh.available
+        if use_shadows:
+            self._bake_shadows_if_needed(s)          # matrisleri/viewport'u geri yükler; diğer durumlardan önce
         glEnable(GL_DEPTH_TEST)
         glEnable(GL_LIGHTING)
         glEnable(GL_LIGHT0)
@@ -293,7 +335,8 @@ class Renderer:
         glLightfv(GL_LIGHT1, GL_DIFFUSE, (*look["fill"], 1.0))
         glLightfv(GL_LIGHT1, GL_AMBIENT, (0.0, 0.0, 0.0, 1.0))
         glLightfv(GL_LIGHT1, GL_SPECULAR, (0.0, 0.0, 0.0, 1.0))
-        if look["fog"] > 0.0:
+        fog_on = look["fog"] > 0.0
+        if fog_on:
             # Sis mesafesi göz uzayında düzlemsel: gözden modelin en yakın ve en uzak noktasına kadar
             near_d = eye_z + MODEL_GAP_CM + self.depth
             span = max(2.0 * self._half_depth * s, 1.0)
@@ -308,15 +351,11 @@ class Renderer:
         glClipPlane(GL_CLIP_PLANE0, (0.0, 0.0, -1.0, 0.0))
         glEnable(GL_CLIP_PLANE0)
 
-        glPushMatrix()
-        # Ön yüz ekran camının MODEL_GAP_CM arkasında, sahne ekranın ortasında
-        glTranslatef(0.0, 0.0, -MODEL_GAP_CM - self._half_depth * s + self.depth)
-        glRotatef(self.pitch, 1.0, 0.0, 0.0)
-        glRotatef(self.yaw, 0.0, 1.0, 0.0)
-        glScalef(s, s, s)
-        glTranslatef(*(-self._center))
-        glCallList(self.model_list)
-        glPopMatrix()
+        if use_shadows:
+            self.sh.begin_main_pass(eye, fog_on, look["shadow"])
+        self._model_geometry(s)
+        if use_shadows:
+            self.sh.end_main_pass()
 
         glDisable(GL_CLIP_PLANE0)
         glDisable(GL_ALPHA_TEST)
@@ -390,7 +429,7 @@ class Renderer:
         if self.show_room:
             _draw_room(self.screen_w, self.screen_h)
         if self.model_list is not None:
-            self._draw_model(eye[2])
+            self._draw_model(eye)
             if self.effects:
                 self.fx.update(dt)
                 self._draw_effects()
