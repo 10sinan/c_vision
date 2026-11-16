@@ -5,6 +5,8 @@ Tuşlar:
   ESC / Q        Çıkış
   F              Tam ekran
   H              HUD (pencere başlığında FPS/poz) aç/kapat
+  Tab            Ayar panelini aç/kapat (sağ üstteki "Ayarlar" düğmesi de açar; aşağıdaki
+                 tuşların hepsi panelden fareyle de yapılabilir)
   Sol / Sağ      Odak uzaklığı çarpanı  -/+ 0.05  (derinlik/yan ölçeği)
   Aşağı / Yukarı Kamera ofseti (ekran merkezinden yukarı) -/+ 0.5 cm
   - / +          Titreme yumuşatma: daha pürüzsüz / daha hızlı tepki
@@ -14,7 +16,7 @@ Tuşlar:
   P              Ayarlar (ekran boyutu, kamera konumu, göz mesafesi)
   K              Mesafe kalibrasyonu (kamera varken)
   J              Gölgeleri aç/kapa (ekran kartı destekliyorsa)
-  O              Işık/sis görünümü: Doğal / Yumuşak / Dramatik
+  O              Işık/sis görünümü: Doğal / Yumuşak / Dramatik (Shift+O: geriye)
   E              Ekrandan taşan yaprak + toz efektlerini aç/kapa
   [ / ]          Efekt yoğunluğu -/+ 0.25
   V              Video kaydı aç/kapa (sahne + kamera yan yana, kayitlar/ klasörüne)
@@ -40,7 +42,8 @@ import pygame
 from pygame.locals import (QUIT, KEYDOWN, VIDEORESIZE, K_ESCAPE, K_q, K_f, K_h,
                            K_LEFT, K_RIGHT, K_UP, K_DOWN, K_r, K_MINUS, K_PLUS,
                            K_EQUALS, K_KP_MINUS, K_KP_PLUS, K_l, K_c, K_PAGEUP,
-                           K_PAGEDOWN, K_w, K_s, K_a, K_d, K_t, K_g, K_m, K_p, K_k, K_v, K_e, K_LEFTBRACKET, K_RIGHTBRACKET, K_o, K_j)
+                           K_PAGEDOWN, K_w, K_s, K_a, K_d, K_t, K_g, K_m, K_p, K_k, K_v, K_e, K_LEFTBRACKET, K_RIGHTBRACKET, K_o, K_j,
+                           K_TAB, KMOD_SHIFT, MOUSEBUTTONDOWN, MOUSEWHEEL)
 
 from head_tracker import HeadTracker
 from tracker_thread import TrackerThread
@@ -53,6 +56,7 @@ from renderer import Renderer, LOOKS
 from menu import Menu, find_models, NO_MODEL, SETTINGS_ITEM, CALIBRATION_ITEM
 from calibration import run_calibration
 from recorder import Recorder
+from panel import Panel, Row
 
 FRAME_W, FRAME_H = 640, 480
 # One Euro filtre ayarları, bileşen başına (x_n, y_n, z_cm).
@@ -172,6 +176,37 @@ def main():
     recorder = Recorder()
     last_saved = None     # son kaydedilen video yolu (başlıkta gösterilir)
     eye = (0.0, cam_offset, NEUTRAL_Z_CM)
+
+    # Ayar paneli: her satır ilgili klavye tuşunu "basar", böylece tuşlarla tek bir kod yolu paylaşılır.
+    def press(plus, minus=None, minus_mod=0):
+        def change(direction):
+            key, mod = (plus, 0) if direction > 0 or minus is None else (minus, minus_mod)
+            pygame.event.post(pygame.event.Event(KEYDOWN, key=key, mod=mod, unicode=""))
+        return change
+
+    has_model = lambda: renderer.model_list is not None
+    panel = Panel([
+        Row("Işık görünümü", "step", press(K_o, K_o, KMOD_SHIFT), lambda: LOOKS[renderer.look]["name"], has_model),
+        Row("Gölgeler", "toggle", press(K_j), lambda: renderer.shadows,
+            lambda: has_model() and renderer.sh.available),
+        Row("Yaprak ve toz efektleri", "toggle", press(K_e), lambda: renderer.effects, has_model),
+        Row("Efekt yoğunluğu", "step", press(K_RIGHTBRACKET, K_LEFTBRACKET),
+            lambda: f"{renderer.fx_density:.2f}", has_model),
+        Row("Ekranı doldur", "toggle", press(K_c), lambda: renderer.cover, has_model),
+        Row("Boyut", "step", press(K_PAGEUP, K_PAGEDOWN), lambda: f"%{renderer.model_scale * 100:.0f}", has_model),
+        Row("Yakınlık", "step", press(K_w, K_s), lambda: f"{renderer.depth:+.0f} cm", has_model),
+        Row("Döndürme", "step", press(K_d, K_a), lambda: f"{renderer.yaw:+.0f}°", has_model),
+        Row("Eğim", "step", press(K_t, K_g), lambda: f"{renderer.pitch:+.0f}°", has_model),
+        Row("Oda çizgileri", "toggle", press(K_l), lambda: renderer.show_room),
+        Row("Yumuşatma", "step", press(K_MINUS, K_PLUS), lambda: f"{smooth:.2f}"),
+        Row("Odak çarpanı", "step", press(K_RIGHT, K_LEFT), lambda: f"{focal_mult:.2f}"),
+        Row("Kamera yüksekliği", "step", press(K_UP, K_DOWN), lambda: f"{cam_offset:.1f} cm"),
+        Row("Video kaydı", "toggle", press(K_v), lambda: recorder.active),
+        Row("Sahne menüsü", "action", press(K_m)),
+        Row("Ekran ve göz ayarları", "action", press(K_p)),
+    ] + ([Row("Mesafe kalibrasyonu", "action", press(K_k))] if tracker else []) + [
+        Row("Varsayılana dön", "action", press(K_r)),
+    ])
     running = True
     try:
         while running:
@@ -181,9 +216,14 @@ def main():
                     running = False
                 elif e.type == VIDEORESIZE:
                     renderer.resize((e.w, e.h))
+                elif e.type == MOUSEBUTTONDOWN and e.button == 1:
+                    panel.click(e.pos, renderer.size)
+                elif e.type == MOUSEWHEEL:
+                    panel.wheel(pygame.mouse.get_pos(), renderer.size, e.y)
                 elif e.type == KEYDOWN:
                     k = e.key
                     if k in (K_ESCAPE, K_q): running = False
+                    elif k == K_TAB: panel.open = not panel.open
                     elif k == K_f: pygame.display.toggle_fullscreen()
                     elif k == K_h: hud = not hud
                     elif k == K_RIGHT: focal_mult += 0.05
@@ -203,7 +243,7 @@ def main():
                         clock.tick()
                     elif k == K_e: renderer.effects = not renderer.effects
                     elif k == K_j: renderer.shadows = not renderer.shadows
-                    elif k == K_o: renderer.look = (renderer.look + 1) % len(LOOKS)
+                    elif k == K_o: renderer.look = (renderer.look + (-1 if e.mod & KMOD_SHIFT else 1)) % len(LOOKS)
                     elif k in (K_LEFTBRACKET, K_RIGHTBRACKET):
                         renderer.fx_density = min(3.0, max(0.0, renderer.fx_density + (0.25 if k == K_RIGHTBRACKET else -0.25)))
                         renderer.sync_effects()
@@ -298,17 +338,17 @@ def main():
                             x_n, y_n, z = blend(blend_from, (x_n, y_n, z), k)
                 eye = head_to_eye_cm(x_n, y_n, z, FRAME_W, FRAME_H, focal_px, cam_offset)
 
+            renderer.draw(eye, dt, present=False)
             if recorder.active:
-                # Kare, ekrana basılmadan ÖNCE okunur (flip sonrası arka tampon tanımsız)
-                renderer.draw(eye, dt, present=False)
+                # Kare, ekrana basılmadan ve panel çizilmeden ÖNCE okunur (flip sonrası arka tampon
+                # tanımsız; panel videoya girmesin)
                 if recorder.due():
                     cam_frame, cam_pose = tracker.latest_frame() if tracker else (None, None)
                     if cam_pose is not None and time.monotonic() - tracker.latest_measurement()[1] > 0.5:
                         cam_pose = None   # yüz kaybolmuş: eski göz işaretlerini gösterme
                     recorder.capture(renderer.grab_frame(), cam_frame, cam_pose, eye[2])
-                pygame.display.flip()
-            else:
-                renderer.draw(eye, dt)
+            panel.draw(renderer.size, pygame.mouse.get_pos())
+            pygame.display.flip()
 
             if hud:
                 rec = f" | REC {recorder.elapsed():.0f}s" if recorder.active else (
