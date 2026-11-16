@@ -31,6 +31,8 @@ Model tuşları (model açıkken; ayarlar çıkışta <model>.view.json'a kayded
   A / D          Sahneyi sola / sağa döndür (5°)
   T / G          Sahneyi üstten / alttan bakışa eğ (5°)
   C              Ekranı doldur / ekrana sığdır
+  B              Öne çıkar: sahnenin ortası ekran düzleminde (baş oynayınca yerinde durur, etrafı
+                 görünür) / tümü camın arkasında (pencereden bakış)
   L              Oda çizgilerini aç/kapat
 
 Kamerasız test: python main.py --mouse
@@ -44,7 +46,7 @@ from pygame.locals import (QUIT, KEYDOWN, VIDEORESIZE, K_ESCAPE, K_q, K_f, K_h,
                            K_LEFT, K_RIGHT, K_UP, K_DOWN, K_r, K_MINUS, K_PLUS,
                            K_EQUALS, K_KP_MINUS, K_KP_PLUS, K_l, K_c, K_PAGEUP,
                            K_PAGEDOWN, K_w, K_s, K_a, K_d, K_t, K_g, K_m, K_p, K_k, K_v, K_e, K_LEFTBRACKET, K_RIGHTBRACKET, K_o, K_j,
-                           K_TAB, K_n, KMOD_SHIFT, MOUSEBUTTONDOWN, MOUSEWHEEL)
+                           K_TAB, K_n, K_b, KMOD_SHIFT, MOUSEBUTTONDOWN, MOUSEWHEEL)
 
 from head_tracker import HeadTracker
 from tracker_thread import TrackerThread
@@ -195,6 +197,7 @@ def main():
         Row("Efekt türü", "step", press(K_n, K_n, KMOD_SHIFT), lambda: KIND_NAMES[renderer.fx_kind], has_model),
         Row("Efekt yoğunluğu", "step", press(K_RIGHTBRACKET, K_LEFTBRACKET),
             lambda: f"{renderer.fx_density:.2f}", has_model),
+        Row("Öne çıkar (etrafına bak)", "toggle", press(K_b), lambda: renderer.popout, has_model),
         Row("Ekranı doldur", "toggle", press(K_c), lambda: renderer.cover, has_model),
         Row("Boyut", "step", press(K_PAGEUP, K_PAGEDOWN), lambda: f"%{renderer.model_scale * 100:.0f}", has_model),
         Row("Yakınlık", "step", press(K_w, K_s), lambda: f"{renderer.depth:+.0f} cm", has_model),
@@ -272,6 +275,7 @@ def main():
                         clock.tick()   # menüde geçen süre dt'ye eklenmesin
                     elif k == K_l: renderer.show_room = not renderer.show_room
                     elif k == K_c: renderer.cover = not renderer.cover
+                    elif k == K_b: renderer.popout = not renderer.popout
                     elif k == K_w: renderer.depth += 2.0
                     elif k == K_s: renderer.depth -= 2.0
                     elif k == K_a: renderer.yaw -= 5.0

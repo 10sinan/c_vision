@@ -42,11 +42,13 @@ from shadows import Shadows
 ROOM_DEPTH_CM = 40.0
 GRID_STEPS = 8            # duvarlardaki derinlik çizgisi sayısı
 NEAR, FAR = 1.0, 2000.0
-MODEL_GAP_CM = 2.0        # modelin ön yüzü ekran camının bu kadar arkasında durur
+MODEL_GAP_CM = 2.0        # modelin ön yüzü ekran camının bu kadar arkasında durur (popout kapalıyken)
+MAX_POPOUT_CM = 18.0      # popout açıkken modelin ön yüzü ekrandan en çok bu kadar öne çıkar
 MAX_TEXTURE_PX = 2048     # bundan büyük dokular küçültülür
 # Model başına kaydedilen görünüm ayarları (<model>.view.json) ve varsayılanları
 VIEW_DEFAULTS = {"model_scale": 1.0, "cover": True, "depth": 0.0, "yaw": 0.0, "pitch": 0.0,
-                 "effects": True, "fx_density": 1.0, "fx_kind": 0, "look": 0, "shadows": True}
+                 "effects": True, "fx_density": 1.0, "fx_kind": 0, "look": 0, "shadows": True,
+                 "popout": True}
 # Işık/sis ön ayarları (O tuşu). ambient: genel dolgu, key: ana ışık, fill: karşı yönden zayıf soğuk ışık,
 # fog: en uzak noktada sisin gücü (0 = sis yok). Sis derinlik ipucudur: uzak parçalar karanlık havaya karışır.
 LOOKS = (
@@ -198,6 +200,9 @@ class Renderer:
         #   depth        sahneyi ekrana doğru (+) / uzağa (-) kaydırma, cm
         #   yaw          sahneyi dikey eksen etrafında döndürme, derece
         #   pitch        sahneyi öne/arkaya eğme, derece (+: üstten bakış)
+        #   popout       True: modelin ORTASI ekran düzlemindedir ve cam kesimi yoktur -> baş oynayınca
+        #                sahne yerinde durur, ön taraf ekrandan taşar, yanları/arkası görünür.
+        #                False: model tümüyle camın arkasında (pencereden bakış; kapalı ortamlar için)
         #   effects      ekrandan taşan yaprak + toz efektleri açık mı
         #   fx_density   efekt yoğunluğu çarpanı
         #   fx_kind      efekt türü (effects.KIND_NAMES indeksi: yaprak / yağmur / kar / ateşböceği)
@@ -286,11 +291,19 @@ class Renderer:
         self.size = size
         glViewport(0, 0, *size)
 
+    def _center_z(self, s):
+        """Model merkezinin z konumu (cm). Ekran düzlemindeki (z=0) noktalar baş oynayınca ekranda
+        yerinde durur; bu yüzden popout açıkken merkez oraya konur (çok derin modellerde ön yüz
+        MAX_POPOUT_CM ile sınırlanır), kapalıyken tüm model camın arkasındadır."""
+        half = self._half_depth * s
+        if self.popout:
+            return min(half, MAX_POPOUT_CM) - half + self.depth
+        return -MODEL_GAP_CM - half + self.depth
+
     def _model_geometry(self, s):
         """Modeli dönüşümleriyle çizer (ana geçiş ve gölge haritası geçişi aynı yolu kullanır)."""
         glPushMatrix()
-        # Ön yüz ekran camının MODEL_GAP_CM arkasında, sahne ekranın ortasında
-        glTranslatef(0.0, 0.0, -MODEL_GAP_CM - self._half_depth * s + self.depth)
+        glTranslatef(0.0, 0.0, self._center_z(s))
         glRotatef(self.pitch, 1.0, 0.0, 0.0)
         glRotatef(self.yaw, 0.0, 1.0, 0.0)
         glScalef(s, s, s)
@@ -300,10 +313,11 @@ class Renderer:
 
     def _bake_shadows_if_needed(self, s):
         """Gölge haritası yalnızca model/görünüm değişince yeniden hesaplanır (ışık ve sahne sabit)."""
-        key = (self.model_path, self.model_list, round(s, 6), round(self.depth, 3), self.yaw, self.pitch)
+        key = (self.model_path, self.model_list, round(s, 6), round(self.depth, 3), self.yaw, self.pitch,
+               self.popout)
         if not self.sh.needs_bake(key):
             return
-        center = (0.0, 0.0, -MODEL_GAP_CM - self._half_depth * s + self.depth)
+        center = (0.0, 0.0, self._center_z(s))
         radius = 0.5 * self._diag * s            # dönmeye karşı değişmeyen kapsayıcı küre
         light_dir = np.asarray(KEY_LIGHT_DIR, dtype=float)
         glMatrixMode(GL_MODELVIEW)
@@ -339,7 +353,7 @@ class Renderer:
         fog_on = look["fog"] > 0.0
         if fog_on:
             # Sis mesafesi göz uzayında düzlemsel: gözden modelin en yakın ve en uzak noktasına kadar
-            near_d = eye_z + MODEL_GAP_CM + self.depth
+            near_d = eye_z - (self._center_z(s) + self._half_depth * s)
             span = max(2.0 * self._half_depth * s, 1.0)
             glEnable(GL_FOG)
             glFogi(GL_FOG_MODE, GL_LINEAR)
@@ -347,10 +361,11 @@ class Renderer:
             glFogf(GL_FOG_START, max(near_d, 0.0))
             glFogf(GL_FOG_END, max(near_d, 0.0) + span / look["fog"])
 
-        # Ekran camının önünde kalan her şey kesilir (gerçek pencere gibi): z <= 0 tutulur.
-        # Düzlem şu anki (dünya) koordinatlarında tanımlanır.
-        glClipPlane(GL_CLIP_PLANE0, (0.0, 0.0, -1.0, 0.0))
-        glEnable(GL_CLIP_PLANE0)
+        # popout kapalıyken ekran camının önünde kalan her şey kesilir (gerçek pencere gibi): z <= 0
+        # tutulur. Düzlem şu anki (dünya) koordinatlarında tanımlanır.
+        if not self.popout:
+            glClipPlane(GL_CLIP_PLANE0, (0.0, 0.0, -1.0, 0.0))
+            glEnable(GL_CLIP_PLANE0)
 
         if use_shadows:
             self.sh.begin_main_pass(eye, fog_on, look["shadow"])
