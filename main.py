@@ -10,6 +10,7 @@ Tuşlar:
   Sol / Sağ      Odak uzaklığı çarpanı  -/+ 0.05  (derinlik/yan ölçeği)
   Aşağı / Yukarı Kamera ofseti (ekran merkezinden yukarı) -/+ 0.5 cm
   - / +          Titreme yumuşatma: daha pürüzsüz / daha hızlı tepki
+  , / .          Hareket gücü -/+ 0.25 (1 = gerçek ölçü; büyüdükçe baş hareketi daha çok etki eder)
   R              Kalibrasyonu (ve model görünümünü) varsayılana döndür
 
   M              Sahne seçim menüsüne dön
@@ -47,14 +48,14 @@ from pygame.locals import (QUIT, KEYDOWN, VIDEORESIZE, K_ESCAPE, K_q, K_f, K_h,
                            K_LEFT, K_RIGHT, K_UP, K_DOWN, K_r, K_MINUS, K_PLUS,
                            K_EQUALS, K_KP_MINUS, K_KP_PLUS, K_l, K_c, K_PAGEUP,
                            K_PAGEDOWN, K_w, K_s, K_a, K_d, K_t, K_g, K_m, K_p, K_k, K_v, K_e, K_LEFTBRACKET, K_RIGHTBRACKET, K_o, K_j,
-                           K_TAB, K_n, K_b, K_u, KMOD_SHIFT, MOUSEBUTTONDOWN, MOUSEWHEEL)
+                           K_TAB, K_n, K_b, K_u, K_COMMA, K_PERIOD, KMOD_SHIFT, MOUSEBUTTONDOWN, MOUSEWHEEL)
 
 from head_tracker import HeadTracker
 from tracker_thread import TrackerThread
 import time
 
 from signal_filter import PoseNormalizer, OneEuroFilter, OutlierGate, decay_toward, blend
-from off_axis import head_to_eye_cm
+from off_axis import head_to_eye_cm, amplify_eye
 from settings import Settings, nearest_aspect_index, ASPECT_PRESETS
 from renderer import Renderer, LOOKS
 from effects import KIND_NAMES
@@ -176,6 +177,7 @@ def main():
 
     focal_mult = settings.focal_mult
     cam_offset = settings.cam_offset_y_cm()
+    gain = settings.parallax_gain    # baş hareketi çarpanı (çıkışta settings.json'a yazılır)
     hud = True
 
     recorder = Recorder()
@@ -208,6 +210,7 @@ def main():
         Row("Döndürme", "step", press(K_d, K_a), lambda: f"{renderer.yaw:+.0f}°", has_model),
         Row("Eğim", "step", press(K_t, K_g), lambda: f"{renderer.pitch:+.0f}°", has_model),
         Row("Oda çizgileri", "toggle", press(K_l), lambda: renderer.show_room),
+        Row("Hareket gücü", "step", press(K_PERIOD, K_COMMA), lambda: f"{gain:.2f} kat"),
         Row("Yumuşatma", "step", press(K_MINUS, K_PLUS), lambda: f"{smooth:.2f}"),
         Row("Odak çarpanı", "step", press(K_RIGHT, K_LEFT), lambda: f"{focal_mult:.2f}"),
         Row("Kamera yüksekliği", "step", press(K_UP, K_DOWN), lambda: f"{cam_offset:.1f} cm"),
@@ -244,6 +247,8 @@ def main():
                         smooth = max(0.25, smooth / 1.25)   # daha hızlı tepki
                     elif k in (K_MINUS, K_KP_MINUS):
                         smooth = min(8.0, smooth * 1.25)    # daha pürüzsüz
+                    elif k == K_PERIOD: gain = min(6.0, gain + 0.25)
+                    elif k == K_COMMA: gain = max(0.5, gain - 0.25)
                     elif k == K_p:
                         if not open_settings():
                             running = False
@@ -292,6 +297,7 @@ def main():
                     elif k == K_r:
                         focal_mult, cam_offset = settings.focal_mult, settings.cam_offset_y_cm()
                         smooth = 1.0
+                        gain = Settings().parallax_gain
                         renderer.reset_view()
 
             focal_px = FRAME_W * focal_mult
@@ -351,7 +357,8 @@ def main():
                             blend_from = None
                         else:
                             x_n, y_n, z = blend(blend_from, (x_n, y_n, z), k)
-                eye = head_to_eye_cm(x_n, y_n, z, FRAME_W, FRAME_H, focal_px, cam_offset)
+                eye = amplify_eye(head_to_eye_cm(x_n, y_n, z, FRAME_W, FRAME_H, focal_px, cam_offset),
+                                  1.0 if use_mouse else gain, cam_offset)   # fare zaten tüm aralığı gezer
 
             renderer.draw(eye, dt, present=False)
             if recorder.active:
@@ -376,6 +383,8 @@ def main():
         if recorder.active:
             print("[KAYIT] Kaydedildi:", recorder.stop())
         renderer.save_view()
+        settings.parallax_gain = gain
+        settings.save()
         if tracker:
             tracker.stop()
         pygame.quit()

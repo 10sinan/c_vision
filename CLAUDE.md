@@ -38,7 +38,7 @@ Data flow, one stage per module (the `stageN_demo.py` files mirror the build-up 
 
 To check rendering without looking at the screen: monkeypatch `pygame.display.flip` to a no-op, call `draw()`, then `glReadPixels` from `GL_BACK` (reading `GL_FRONT` returns black on this Wayland setup).
 
-[main.py](main.py) wires these together: the same `focal_px` (= `FRAME_W * focal_mult`) must be used for both the Z estimate (set on `tracker.tracker.focal_length_px`) and the X/Y conversion in `head_to_eye_cm`, otherwise depth and lateral scale disagree. When the face is lost for >1 s, the filtered eye drifts back toward center at the neutral 60 cm. Runtime tuning keys (focal multiplier, camera offset, EMA alpha, reset) are documented in the `main.py` docstring.
+[main.py](main.py) wires these together: the same `focal_px` (= `FRAME_W * focal_mult`) must be used for both the Z estimate (set on `tracker.tracker.focal_length_px`) and the X/Y conversion in `head_to_eye_cm`, otherwise depth and lateral scale disagree. The eye position then goes through `off_axis.amplify_eye` with the user's `parallax_gain` (`settings.json`, `,`/`.` keys, default 2.5; not applied in `--mouse` mode): seated head movement is only a few cm, at which everything behind the glass slides the same way and near/far parallax is barely visible, so x/y are exaggerated (1.0 = physically correct). When the face is lost for >1 s, the filtered eye drifts back toward center at the neutral 60 cm. Runtime tuning keys (focal multiplier, camera offset, EMA alpha, reset) are documented in the `main.py` docstring.
 
 ## Notes
 

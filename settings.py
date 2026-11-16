@@ -30,6 +30,7 @@ class Settings:
     cam_gap_cm: float = 1.0          # webcam, ekranın üst kenarının bu kadar üstünde
     ipd_cm: float = 6.3              # göz bebekleri arası mesafe (derinlik tahmini için)
     focal_mult: float = 0.85         # kamera odak uzaklığı çarpanı (kalibrasyonla ayarlanır)
+    parallax_gain: float = 2.5       # baş hareketi çarpanı: 1 = fiziksel olarak doğru, >1 = güçlendirilmiş etki
 
     def screen_cm(self):
         """:return: (genişlik, yükseklik) cm; çapraz ve en-boy oranından."""
@@ -47,6 +48,7 @@ class Settings:
         self.cam_gap_cm = min(max(self.cam_gap_cm, 0.0), 15.0)
         self.ipd_cm = min(max(self.ipd_cm, 4.5), 8.0)
         self.focal_mult = min(max(self.focal_mult, 0.2), 3.0)
+        self.parallax_gain = min(max(self.parallax_gain, 0.5), 6.0)
         return self
 
     @classmethod

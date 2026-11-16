@@ -30,6 +30,17 @@ def head_to_eye_cm(x_n, y_n, z_cm, frame_w, frame_h, focal_px,
     return ex, ey, z_cm
 
 
+def amplify_eye(eye, gain, center_y_cm=0.0):
+    """
+    Baş hareketini güçlendirir: gözün yatay/dikey konumu, nötr noktaya (x=0, y=center_y_cm) göre
+    gain ile çarpılır; uzaklık (z) değişmez. gain=1 fiziksel olarak doğrudur. Otururken baş yalnızca
+    birkaç cm oynar ve camın arkasındaki her şey aynı yöne kayar; yakın-uzak farkı (paralaks) ancak
+    daha büyük hareketle belirginleşir, bu yüzden etki için hareket büyütülür.
+    """
+    ex, ey, ez = eye
+    return ex * gain, center_y_cm + (ey - center_y_cm) * gain, ez
+
+
 def off_axis_frustum(eye, near, far,
                      screen_w=SCREEN_W_CM, screen_h=SCREEN_H_CM):
     """
