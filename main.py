@@ -15,7 +15,7 @@ Tuşlar:
   K              Mesafe kalibrasyonu (kamera varken)
   J              Gölgeleri aç/kapa (ekran kartı destekliyorsa)
   O              Işık/sis görünümü: Doğal / Yumuşak / Dramatik
-  E              Ekrandan taşan yaprak/kelebek + toz efektlerini aç/kapa
+  E              Ekrandan taşan yaprak + toz efektlerini aç/kapa
   [ / ]          Efekt yoğunluğu -/+ 0.25
   V              Video kaydı aç/kapa (sahne + kamera yan yana, kayitlar/ klasörüne)
 

@@ -14,7 +14,7 @@ class BoundsTest(unittest.TestCase):
         fx = E.Effects(W, H)
         for t in np.linspace(0, 600, 400):             # 10 dakikalık simülasyon
             fx.t = float(t)
-            for pos in (fx.leaf_positions(), fx.butterfly_positions()):
+            for pos in (fx.leaf_positions(),):
                 z_lo = E.FG_Z_RANGE[0] - 3
                 z_hi = E.FG_Z_RANGE[1] + 3
                 self.assertTrue(((pos[:, 2] > z_lo) & (pos[:, 2] < z_hi)).all())
@@ -71,7 +71,7 @@ class SetupTest(unittest.TestCase):
 
     def test_density_scales_counts(self):
         full, half, none = E.Effects(W, H, 1.0), E.Effects(W, H, 0.5), E.Effects(W, H, 0.0)
-        self.assertEqual(none.counts, (0, 0, 0))
+        self.assertEqual(none.counts, (0, 0))
         for f, h in zip(full.counts, half.counts):
             self.assertLess(h, f)
         half.set_density(1.0)
@@ -94,17 +94,6 @@ class ShapeTest(unittest.TestCase):
             length = np.linalg.norm(verts[0] - verts[2])        # elmasın uzun köşegeni = 2*boyut (döndürme korur)
             self.assertAlmostEqual(length, 2 * fx._leaf_size[0], places=6)
             self.assertTrue(((color >= 0) & (color <= 1)).all())
-
-    def test_butterfly_wings_flap(self):
-        fx = E.Effects(W, H)
-        spans = []
-        for t in np.linspace(0, 1, 40):
-            fx.t = float(t)
-            tris, _ = fx.butterfly_wings(0)
-            self.assertEqual(tris.shape, (4, 3, 3))
-            spans.append(np.linalg.norm(tris[0][1] - tris[2][1]))   # sol ve sağ üst kanat uçları arası mesafe
-            self.assertEqual(fx.butterfly_body(0).shape, (2, 3))
-        self.assertGreater(max(spans) - min(spans), 0.5)            # açılıp kapanıyor
 
 
 if __name__ == "__main__":

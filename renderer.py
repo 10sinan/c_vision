@@ -199,7 +199,7 @@ class Renderer:
         #   depth        sahneyi ekrana doğru (+) / uzağa (-) kaydırma, cm
         #   yaw          sahneyi dikey eksen etrafında döndürme, derece
         #   pitch        sahneyi öne/arkaya eğme, derece (+: üstten bakış)
-        #   effects      ekrandan taşan yaprak/kelebek + toz efektleri açık mı
+        #   effects      ekrandan taşan yaprak + toz efektleri açık mı
         #   fx_density   efekt yoğunluğu çarpanı
         self.fx = Effects(self.screen_w, self.screen_h)
         self.sh = Shadows()   # GL bağlamı hazır; kullanılamıyorsa available=False
@@ -366,11 +366,11 @@ class Renderer:
 
     def _draw_effects(self):
         """
-        Ekranın önünde süzülen yaprak/kelebekler ve sahnedeki toz. Clip düzlemi KAPALI çizilir
+        Ekranın önünde süzülen yapraklar ve sahnedeki toz. Clip düzlemi KAPALI çizilir
         (nesneler camın önüne taşabilsin). Derinlik tamponu modelden kalır -> toz model arkasında gizlenir.
         """
-        n_dust, n_leaf, n_bfly = self.fx.counts
-        if n_dust + n_leaf + n_bfly == 0:
+        n_dust, n_leaf = self.fx.counts
+        if n_dust + n_leaf == 0:
             return
         glEnable(GL_DEPTH_TEST)
         if n_dust:
@@ -395,19 +395,6 @@ class Renderer:
             glColor4f(*color, 1.0)
             glBegin(GL_TRIANGLE_FAN)
             for v in verts:
-                glVertex3f(*v)
-            glEnd()
-        for i in range(n_bfly):
-            tris, color = self.fx.butterfly_wings(i)
-            glBegin(GL_TRIANGLES)
-            for k, tri in enumerate(tris):                    # sıra: sol üst, sol alt, sağ üst, sağ alt
-                glColor4f(*(color * (1.0 if k % 2 == 0 else 0.8)), 1.0)
-                for v in tri:
-                    glVertex3f(*v)
-            glEnd()
-            glBegin(GL_LINES)                                 # gövde
-            glColor4f(0.1, 0.08, 0.06, 1.0)
-            for v in self.fx.butterfly_body(i):
                 glVertex3f(*v)
             glEnd()
         glDisable(GL_DEPTH_TEST)
