@@ -29,8 +29,7 @@ from OpenGL.GL import (
     GL_NORMAL_ARRAY, GL_TEXTURE_COORD_ARRAY, GL_COLOR_ARRAY, GL_FLOAT,
     GL_UNSIGNED_INT, glClipPlane, GL_CLIP_PLANE0, glDeleteLists, glDeleteTextures,
     glReadPixels, glReadBuffer, GL_RGB, GL_BACK, glDepthMask, GL_FALSE, GL_TRUE as _GL_TRUE,
-    GL_POINTS, GL_TRIANGLE_FAN, GL_POINT_SMOOTH, glPointSize, glPointParameterfv, glPointParameterf,
-    GL_POINT_DISTANCE_ATTENUATION, GL_POINT_SIZE_MIN, GL_POINT_SIZE_MAX,
+    GL_ONE, GL_TRIANGLE_FAN,
     GL_LIGHT1, GL_LIGHT_MODEL_AMBIENT, glLightModelfv, GL_SPECULAR, GL_FOG, GL_FOG_MODE, GL_LINEAR,
     GL_FOG_START, GL_FOG_END, GL_FOG_COLOR, glFogi, glFogf, glFogfv, glGetIntegerv, GL_VIEWPORT,
 )
@@ -47,7 +46,7 @@ MODEL_GAP_CM = 2.0        # modelin ön yüzü ekran camının bu kadar arkasın
 MAX_TEXTURE_PX = 2048     # bundan büyük dokular küçültülür
 # Model başına kaydedilen görünüm ayarları (<model>.view.json) ve varsayılanları
 VIEW_DEFAULTS = {"model_scale": 1.0, "cover": True, "depth": 0.0, "yaw": 0.0, "pitch": 0.0,
-                 "effects": True, "fx_density": 1.0, "look": 0, "shadows": True}
+                 "effects": True, "fx_density": 1.0, "fx_kind": 0, "look": 0, "shadows": True}
 # Işık/sis ön ayarları (O tuşu). ambient: genel dolgu, key: ana ışık, fill: karşı yönden zayıf soğuk ışık,
 # fog: en uzak noktada sisin gücü (0 = sis yok). Sis derinlik ipucudur: uzak parçalar karanlık havaya karışır.
 LOOKS = (
@@ -201,6 +200,7 @@ class Renderer:
         #   pitch        sahneyi öne/arkaya eğme, derece (+: üstten bakış)
         #   effects      ekrandan taşan yaprak + toz efektleri açık mı
         #   fx_density   efekt yoğunluğu çarpanı
+        #   fx_kind      efekt türü (effects.KIND_NAMES indeksi: yaprak / yağmur / kar / ateşböceği)
         self.fx = Effects(self.screen_w, self.screen_h)
         self.sh = Shadows()   # GL bağlamı hazır; kullanılamıyorsa available=False
         self.reset_view()
@@ -263,6 +263,7 @@ class Renderer:
         """Efekt yoğunluğu ayarını Effects nesnesine uygular (görünüm yüklenince/değişince çağrılır)."""
         if hasattr(self, "fx"):
             self.fx.set_density(self.fx_density)
+            self.fx.set_kind(self.fx_kind)
 
     def _load_view(self):
         try:
@@ -370,25 +371,11 @@ class Renderer:
         (nesneler camın önüne taşabilsin). Derinlik tamponu modelden kalır -> toz model arkasında gizlenir.
         """
         n_dust, n_leaf = self.fx.counts
-        if n_dust + n_leaf == 0:
-            return
         glEnable(GL_DEPTH_TEST)
+        self._draw_weather()
         if n_dust:
             glDepthMask(GL_FALSE)                        # yarı saydam: derinlik yazmaz
-            glEnable(GL_POINT_SMOOTH)
-            glPointSize(3.5)
-            try:   # uzaktaki toz küçük, yakındaki büyük görünsün (60 cm'de 3.5 px)
-                glPointParameterfv(GL_POINT_DISTANCE_ATTENUATION, (0.0, 0.0, 1.0 / (60.0 * 60.0)))
-                glPointParameterf(GL_POINT_SIZE_MIN, 1.0)
-                glPointParameterf(GL_POINT_SIZE_MAX, 9.0)
-            except Exception:
-                pass                                     # sürücü desteklemiyorsa sabit boyut
-            glBegin(GL_POINTS)
-            glColor4f(1.0, 0.95, 0.7, 0.6)
-            for p in self.fx.dust_positions():
-                glVertex3f(*p)
-            glEnd()
-            glDisable(GL_POINT_SMOOTH)
+            self._draw_sprites(self.fx.dust_positions(), 0.07, (1.0, 0.95, 0.7, 0.6))
             glDepthMask(_GL_TRUE)
         for i in range(n_leaf):
             verts, color = self.fx.leaf_quad(i)
@@ -398,6 +385,83 @@ class Renderer:
                 glVertex3f(*v)
             glEnd()
         glDisable(GL_DEPTH_TEST)
+
+    def _sprite_texture(self, soft):
+        """Yuvarlak nokta dokusu (beyaz, alfa = disk). soft=True: kenara doğru sönen ışık halesi."""
+        if not hasattr(self, "_sprite_tex"):
+            self._sprite_tex = {}
+        if soft not in self._sprite_tex:
+            n = 32
+            ax = (np.arange(n) + 0.5) / n * 2 - 1
+            rad = np.hypot(*np.meshgrid(ax, ax))
+            alpha = np.clip(1 - rad, 0, 1) ** 2 if soft else np.clip((1 - rad) / 0.3, 0, 1)
+            img = np.full((n, n, 4), 255, np.uint8)
+            img[:, :, 3] = (alpha * 255).astype(np.uint8)
+            tex = glGenTextures(1)
+            glBindTexture(GL_TEXTURE_2D, tex)
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, n, n, 0, GL_RGBA, GL_UNSIGNED_BYTE, img.tobytes())
+            self._sprite_tex[soft] = tex
+        return self._sprite_tex[soft]
+
+    def _draw_sprites(self, positions, radius_cm, rgba, soft=False):
+        """
+        Yuvarlak parçacıkları ekrana paralel dokulu dörtgenler olarak çizer (kamera hiç dönmediği için
+        XY düzlemindeki dörtgen her zaman kullanıcıya bakar). Boyut cm cinsindendir -> perspektif doğal.
+        GL_POINT_SMOOTH kullanılmaz: bu makinedeki sürücüde (radeonsi) yumuşak noktalar hiç çizilmiyor.
+        rgba: tek renk (4,) ya da parçacık başına (N, 4).
+        """
+        from OpenGL.GL import (glEnableClientState, glDisableClientState, glVertexPointer, glTexCoordPointer,
+                               glColorPointer, glDrawArrays, GL_QUADS)
+        n = len(positions)
+        corners = np.array([(-1, -1), (1, -1), (1, 1), (-1, 1)], np.float32)
+        verts = np.repeat(np.asarray(positions, np.float32), 4, axis=0)
+        verts[:, :2] += np.tile(corners, (n, 1)) * radius_cm
+        uvs = np.ascontiguousarray(np.tile((corners + 1) / 2, (n, 1)))
+        colors = np.ascontiguousarray(np.repeat(np.broadcast_to(np.asarray(rgba, np.float32), (n, 4)), 4, axis=0))
+        glEnable(GL_TEXTURE_2D)
+        glBindTexture(GL_TEXTURE_2D, self._sprite_texture(soft))
+        for state in (GL_VERTEX_ARRAY, GL_TEXTURE_COORD_ARRAY, GL_COLOR_ARRAY):
+            glEnableClientState(state)
+        glVertexPointer(3, GL_FLOAT, 0, verts)
+        glTexCoordPointer(2, GL_FLOAT, 0, uvs)
+        glColorPointer(4, GL_FLOAT, 0, colors)
+        glDrawArrays(GL_QUADS, 0, 4 * n)
+        for state in (GL_VERTEX_ARRAY, GL_TEXTURE_COORD_ARRAY, GL_COLOR_ARRAY):
+            glDisableClientState(state)
+        glDisable(GL_TEXTURE_2D)
+
+    def _draw_weather(self):
+        """Yağmur / kar / ateşböcekleri (seçili türe göre; diğerleri boş döner). Yarı saydam: derinlik yazmaz."""
+        rain = self.fx.rain_segments()
+        snow = self.fx.snow_positions()
+        flies, glow = self.fx.firefly_points()
+        if not (len(rain) or len(snow) or len(flies)):
+            return
+        glDepthMask(GL_FALSE)
+        if len(rain):
+            glLineWidth(1.2)
+            glBegin(GL_LINES)
+            for head, tail in rain:
+                glColor4f(0.75, 0.85, 1.0, 0.55)
+                glVertex3f(*head)
+                glColor4f(0.75, 0.85, 1.0, 0.0)          # kuyruk saydamlaşır
+                glVertex3f(*tail)
+            glEnd()
+            glLineWidth(1.8)
+        if len(snow):
+            self._draw_sprites(snow, 0.13, (1.0, 1.0, 1.0, 0.9))
+        if len(flies):
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE)            # ışık: üst üste binince parlar
+            rgba = np.empty((len(flies), 4), np.float32)
+            rgba[:, :3] = (0.75, 1.0, 0.35)
+            rgba[:, 3] = 0.55 * glow
+            self._draw_sprites(flies, 0.9, rgba, soft=True)      # geniş hale
+            rgba[:, 3] = glow
+            self._draw_sprites(flies, 0.14, rgba)                # parlak çekirdek
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+        glDepthMask(_GL_TRUE)
 
     def draw(self, eye, dt=0.0, present=True):
         """eye: ekran merkezine göre (ex, ey, ez) cm. present=False: ekrana basmaz (grab_frame için)."""

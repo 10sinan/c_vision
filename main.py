@@ -17,7 +17,8 @@ Tuşlar:
   K              Mesafe kalibrasyonu (kamera varken)
   J              Gölgeleri aç/kapa (ekran kartı destekliyorsa)
   O              Işık/sis görünümü: Doğal / Yumuşak / Dramatik (Shift+O: geriye)
-  E              Ekrandan taşan yaprak + toz efektlerini aç/kapa
+  E              Efektleri aç/kapa
+  N              Efekt türü: Yaprak / Yağmur / Kar / Ateşböceği (Shift+N: geriye)
   [ / ]          Efekt yoğunluğu -/+ 0.25
   V              Video kaydı aç/kapa (sahne + kamera yan yana, kayitlar/ klasörüne)
 
@@ -43,7 +44,7 @@ from pygame.locals import (QUIT, KEYDOWN, VIDEORESIZE, K_ESCAPE, K_q, K_f, K_h,
                            K_LEFT, K_RIGHT, K_UP, K_DOWN, K_r, K_MINUS, K_PLUS,
                            K_EQUALS, K_KP_MINUS, K_KP_PLUS, K_l, K_c, K_PAGEUP,
                            K_PAGEDOWN, K_w, K_s, K_a, K_d, K_t, K_g, K_m, K_p, K_k, K_v, K_e, K_LEFTBRACKET, K_RIGHTBRACKET, K_o, K_j,
-                           K_TAB, KMOD_SHIFT, MOUSEBUTTONDOWN, MOUSEWHEEL)
+                           K_TAB, K_n, KMOD_SHIFT, MOUSEBUTTONDOWN, MOUSEWHEEL)
 
 from head_tracker import HeadTracker
 from tracker_thread import TrackerThread
@@ -53,6 +54,7 @@ from signal_filter import PoseNormalizer, OneEuroFilter, OutlierGate, decay_towa
 from off_axis import head_to_eye_cm
 from settings import Settings, nearest_aspect_index, ASPECT_PRESETS
 from renderer import Renderer, LOOKS
+from effects import KIND_NAMES
 from menu import Menu, find_models, NO_MODEL, SETTINGS_ITEM, CALIBRATION_ITEM
 from calibration import run_calibration
 from recorder import Recorder
@@ -189,7 +191,8 @@ def main():
         Row("Işık görünümü", "step", press(K_o, K_o, KMOD_SHIFT), lambda: LOOKS[renderer.look]["name"], has_model),
         Row("Gölgeler", "toggle", press(K_j), lambda: renderer.shadows,
             lambda: has_model() and renderer.sh.available),
-        Row("Yaprak ve toz efektleri", "toggle", press(K_e), lambda: renderer.effects, has_model),
+        Row("Efektler", "toggle", press(K_e), lambda: renderer.effects, has_model),
+        Row("Efekt türü", "step", press(K_n, K_n, KMOD_SHIFT), lambda: KIND_NAMES[renderer.fx_kind], has_model),
         Row("Efekt yoğunluğu", "step", press(K_RIGHTBRACKET, K_LEFTBRACKET),
             lambda: f"{renderer.fx_density:.2f}", has_model),
         Row("Ekranı doldur", "toggle", press(K_c), lambda: renderer.cover, has_model),
@@ -243,6 +246,9 @@ def main():
                         clock.tick()
                     elif k == K_e: renderer.effects = not renderer.effects
                     elif k == K_j: renderer.shadows = not renderer.shadows
+                    elif k == K_n:
+                        renderer.fx_kind = (renderer.fx_kind + (-1 if e.mod & KMOD_SHIFT else 1)) % len(KIND_NAMES)
+                        renderer.sync_effects()
                     elif k == K_o: renderer.look = (renderer.look + (-1 if e.mod & KMOD_SHIFT else 1)) % len(LOOKS)
                     elif k in (K_LEFTBRACKET, K_RIGHTBRACKET):
                         renderer.fx_density = min(3.0, max(0.0, renderer.fx_density + (0.25 if k == K_RIGHTBRACKET else -0.25)))
