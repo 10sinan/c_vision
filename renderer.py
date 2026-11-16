@@ -29,7 +29,7 @@ from OpenGL.GL import (
     GL_NORMAL_ARRAY, GL_TEXTURE_COORD_ARRAY, GL_COLOR_ARRAY, GL_FLOAT,
     GL_UNSIGNED_INT, glClipPlane, GL_CLIP_PLANE0, glDeleteLists, glDeleteTextures,
     glReadPixels, glReadBuffer, GL_RGB, GL_BACK, glDepthMask, GL_FALSE, GL_TRUE as _GL_TRUE,
-    GL_ONE, GL_TRIANGLE_FAN,
+    GL_ONE, GL_TRIANGLE_FAN, glNormal3f,
     GL_LIGHT1, GL_LIGHT_MODEL_AMBIENT, glLightModelfv, GL_SPECULAR, GL_FOG, GL_FOG_MODE, GL_LINEAR,
     GL_FOG_START, GL_FOG_END, GL_FOG_COLOR, glFogi, glFogf, glFogfv, glGetIntegerv, GL_VIEWPORT,
 )
@@ -44,11 +44,15 @@ GRID_STEPS = 8            # duvarlardaki derinlik çizgisi sayısı
 NEAR, FAR = 1.0, 2000.0
 MODEL_GAP_CM = 2.0        # modelin ön yüzü ekran camının bu kadar arkasında durur (popout kapalıyken)
 MAX_POPOUT_CM = 18.0      # popout açıkken modelin ön yüzü ekrandan en çok bu kadar öne çıkar
+ROOM_DEPTH_RATIO = 0.9    # oda modunda kutu odanın derinliği / ekran genişliği
+ROOM_FILL = 0.8           # oda modunda model, odanın en çok bu kadarını kaplar (boyut çarpanından önce)
+ROOM_WALL_COLOR = (0.93, 0.92, 0.89)
+ROOM_GRID = 10            # duvar başına ızgara bölmesi (köşe karartması için)
 MAX_TEXTURE_PX = 2048     # bundan büyük dokular küçültülür
 # Model başına kaydedilen görünüm ayarları (<model>.view.json) ve varsayılanları
 VIEW_DEFAULTS = {"model_scale": 1.0, "cover": True, "depth": 0.0, "yaw": 0.0, "pitch": 0.0,
                  "effects": True, "fx_density": 1.0, "fx_kind": 0, "look": 0, "shadows": True,
-                 "popout": True}
+                 "popout": True, "room": True}
 # Işık/sis ön ayarları (O tuşu). ambient: genel dolgu, key: ana ışık, fill: karşı yönden zayıf soğuk ışık,
 # fog: en uzak noktada sisin gücü (0 = sis yok). Sis derinlik ipucudur: uzak parçalar karanlık havaya karışır.
 LOOKS = (
@@ -203,6 +207,9 @@ class Renderer:
         #   popout       True: modelin ORTASI ekran düzlemindedir ve cam kesimi yoktur -> baş oynayınca
         #                sahne yerinde durur, ön taraf ekrandan taşar, yanları/arkası görünür.
         #                False: model tümüyle camın arkasında (pencereden bakış; kapalı ortamlar için)
+        #   room         True: ekranın arkasında duvarlı bir kutu oda çizilir, model odanın içinde zeminde
+        #                durur (cover/popout yok sayılır). Duvarlar derinlik ipucudur: baş oynayınca
+        #                oda ekrana sabit bir pencerenin arkasında gerçek bir kutu gibi görünür.
         #   effects      ekrandan taşan yaprak + toz efektleri açık mı
         #   fx_density   efekt yoğunluğu çarpanı
         #   fx_kind      efekt türü (effects.KIND_NAMES indeksi: yaprak / yağmur / kar / ateşböceği)
@@ -291,19 +298,88 @@ class Renderer:
         self.size = size
         glViewport(0, 0, *size)
 
-    def _center_z(self, s):
-        """Model merkezinin z konumu (cm). Ekran düzlemindeki (z=0) noktalar baş oynayınca ekranda
-        yerinde durur; bu yüzden popout açıkken merkez oraya konur (çok derin modellerde ön yüz
-        MAX_POPOUT_CM ile sınırlanır), kapalıyken tüm model camın arkasındadır."""
+    @property
+    def room_depth(self):
+        return self.screen_w * ROOM_DEPTH_RATIO
+
+    def _scale(self):
+        """Model birimlerinden cm'ye ölçek (görünüm ayarlarına göre)."""
+        if self.room:   # odanın içine sığdır
+            ex, ey, ez = self._ext
+            base = ROOM_FILL * min(self.screen_w / ex, self.screen_h / ey, self.room_depth / ez)
+        else:
+            base = self._cover_scale if self.cover else self._fit_scale
+        return base * self.model_scale
+
+    def _model_center(self, s):
+        """Model merkezinin konumu (cm).
+        Oda modu: odanın ortasında, tabanı zeminde.
+        popout: merkez ekran düzleminde (z=0'daki noktalar baş oynayınca ekranda yerinde durur; çok derin
+        modellerde ön yüz MAX_POPOUT_CM ile sınırlanır). Diğer durumda tüm model camın arkasındadır."""
         half = self._half_depth * s
+        if self.room:
+            return 0.0, -self.screen_h / 2.0 + self._ext[1] * s / 2.0, -self.room_depth / 2.0 + self.depth
         if self.popout:
-            return min(half, MAX_POPOUT_CM) - half + self.depth
-        return -MODEL_GAP_CM - half + self.depth
+            return 0.0, 0.0, min(half, MAX_POPOUT_CM) - half + self.depth
+        return 0.0, 0.0, -MODEL_GAP_CM - half + self.depth
+
+    def _room_walls(self):
+        """Kutu odanın 5 duvarı (arka, sol, sağ, zemin, tavan); ekran boyutu değişince yeniden derlenir.
+        Her duvar ızgaraya bölünür ve kenarlara doğru hafifçe karartılır (köşe gölgesi izlenimi)."""
+        key = (self.screen_w, self.screen_h, self.room_depth)
+        if getattr(self, "_room_key", None) != key:
+            if getattr(self, "_room_list", None) is not None:
+                glDeleteLists(self._room_list, 1)
+            hw, hh, d = self.screen_w / 2.0, self.screen_h / 2.0, self.room_depth
+            # (köşe, u ekseni, v ekseni, içe bakan normal)
+            walls = (
+                ((-hw, -hh, -d), (2 * hw, 0, 0), (0, 2 * hh, 0), (0, 0, 1)),     # arka
+                ((-hw, -hh, 0), (0, 0, -d), (0, 2 * hh, 0), (1, 0, 0)),          # sol
+                ((hw, -hh, -d), (0, 0, d), (0, 2 * hh, 0), (-1, 0, 0)),          # sağ
+                ((-hw, -hh, 0), (2 * hw, 0, 0), (0, 0, -d), (0, 1, 0)),          # zemin
+                ((-hw, hh, -d), (2 * hw, 0, 0), (0, 0, d), (0, -1, 0)),          # tavan
+            )
+            n = ROOM_GRID
+
+            def vertex(o, a, b, u, v):
+                edge = min(u, 1 - u, v, 1 - v) / 0.3
+                t = min(max(edge, 0.0), 1.0)
+                shade = 0.72 + 0.28 * t * t * (3 - 2 * t)
+                glColor4f(*(c * shade for c in ROOM_WALL_COLOR), 1.0)
+                glVertex3f(*(o[i] + a[i] * u + b[i] * v for i in range(3)))
+
+            self._room_list = glGenLists(1)
+            glNewList(self._room_list, GL_COMPILE)
+            glBegin(GL_TRIANGLES)
+            for o, a, b, normal in walls:
+                glNormal3f(*normal)
+                for i in range(n):
+                    for j in range(n):
+                        u0, u1, v0, v1 = i / n, (i + 1) / n, j / n, (j + 1) / n
+                        for u, v in ((u0, v0), (u1, v0), (u1, v1), (u0, v0), (u1, v1), (u0, v1)):
+                            vertex(o, a, b, u, v)
+            glEnd()
+            glEndList()
+            self._room_key = key
+        return self._room_list
+
+    def _draw_room_walls(self):
+        """Duvarları ışıklı geçişte çizer (gölge shader'ı açıksa modelin gölgesi zemine/duvara düşer)."""
+        if not hasattr(self, "_white_tex"):
+            self._white_tex = glGenTextures(1)
+            glBindTexture(GL_TEXTURE_2D, self._white_tex)
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, b"\xff\xff\xff\xff")
+        glEnable(GL_TEXTURE_2D)                     # gölge shader'ı her zaman doku okur -> 1x1 beyaz
+        glBindTexture(GL_TEXTURE_2D, self._white_tex)
+        glCallList(self._room_walls())
+        glDisable(GL_TEXTURE_2D)
 
     def _model_geometry(self, s):
         """Modeli dönüşümleriyle çizer (ana geçiş ve gölge haritası geçişi aynı yolu kullanır)."""
         glPushMatrix()
-        glTranslatef(0.0, 0.0, self._center_z(s))
+        glTranslatef(*self._model_center(s))
         glRotatef(self.pitch, 1.0, 0.0, 0.0)
         glRotatef(self.yaw, 0.0, 1.0, 0.0)
         glScalef(s, s, s)
@@ -314,10 +390,10 @@ class Renderer:
     def _bake_shadows_if_needed(self, s):
         """Gölge haritası yalnızca model/görünüm değişince yeniden hesaplanır (ışık ve sahne sabit)."""
         key = (self.model_path, self.model_list, round(s, 6), round(self.depth, 3), self.yaw, self.pitch,
-               self.popout)
+               self.popout, self.room, self.screen_w, self.screen_h)
         if not self.sh.needs_bake(key):
             return
-        center = (0.0, 0.0, self._center_z(s))
+        center = self._model_center(s)
         radius = 0.5 * self._diag * s            # dönmeye karşı değişmeyen kapsayıcı küre
         light_dir = np.asarray(KEY_LIGHT_DIR, dtype=float)
         glMatrixMode(GL_MODELVIEW)
@@ -326,7 +402,7 @@ class Renderer:
 
     def _draw_model(self, eye=(0.0, 0.0, 60.0)):
         eye_z = eye[2]
-        s = (self._cover_scale if self.cover else self._fit_scale) * self.model_scale
+        s = self._scale()
         use_shadows = self.shadows and self.sh.available
         if use_shadows:
             self._bake_shadows_if_needed(s)          # matrisleri/viewport'u geri yükler; diğer durumlardan önce
@@ -350,10 +426,10 @@ class Renderer:
         glLightfv(GL_LIGHT1, GL_DIFFUSE, (*look["fill"], 1.0))
         glLightfv(GL_LIGHT1, GL_AMBIENT, (0.0, 0.0, 0.0, 1.0))
         glLightfv(GL_LIGHT1, GL_SPECULAR, (0.0, 0.0, 0.0, 1.0))
-        fog_on = look["fog"] > 0.0
+        fog_on = look["fog"] > 0.0 and not self.room   # odada derinliği duvarlar verir; sis duvarları karartır
         if fog_on:
             # Sis mesafesi göz uzayında düzlemsel: gözden modelin en yakın ve en uzak noktasına kadar
-            near_d = eye_z - (self._center_z(s) + self._half_depth * s)
+            near_d = eye_z - (self._model_center(s)[2] + self._half_depth * s)
             span = max(2.0 * self._half_depth * s, 1.0)
             glEnable(GL_FOG)
             glFogi(GL_FOG_MODE, GL_LINEAR)
@@ -363,12 +439,14 @@ class Renderer:
 
         # popout kapalıyken ekran camının önünde kalan her şey kesilir (gerçek pencere gibi): z <= 0
         # tutulur. Düzlem şu anki (dünya) koordinatlarında tanımlanır.
-        if not self.popout:
+        if self.room or not self.popout:
             glClipPlane(GL_CLIP_PLANE0, (0.0, 0.0, -1.0, 0.0))
             glEnable(GL_CLIP_PLANE0)
 
         if use_shadows:
             self.sh.begin_main_pass(eye, fog_on, look["shadow"])
+        if self.room:
+            self._draw_room_walls()
         self._model_geometry(s)
         if use_shadows:
             self.sh.end_main_pass()
