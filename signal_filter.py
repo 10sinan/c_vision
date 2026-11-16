@@ -34,6 +34,55 @@ class PoseNormalizer:
         return _clamp(x_n, -1.0, 1.0), _clamp(y_n, -1.0, 1.0), z
 
 
+class OutlierGate:
+    """
+    Tek karelik hatalı ölçümleri (landmark sıçraması) filtreye girmeden eler.
+
+    Ölçüm (x_n, y_n, z_cm), son KABUL EDİLEN ölçümle karşılaştırılır: bir karede baş
+    fiziksel olarak bu kadar yer değiştiremez. Arka arkaya max_rejects ret olursa
+    sıçrama gerçektir (ör. başka bir yüz) ve kabul edilir; max_gap_s'den uzun aradan
+    sonra gelen ölçüm de karşılaştırılmadan kabul edilir.
+    """
+
+    def __init__(self, max_xy=0.3, max_z_ratio=0.25, max_rejects=3, max_gap_s=0.2):
+        self.max_xy = max_xy
+        self.max_z_ratio = max_z_ratio
+        self.max_rejects = max_rejects
+        self.max_gap_s = max_gap_s
+        self.reset()
+
+    def reset(self):
+        self._last = None
+        self._t = None
+        self._rejects = 0
+
+    def accept(self, values, t):
+        """:return: True ise ölçüm filtreye verilebilir."""
+        if self._last is not None and t - self._t <= self.max_gap_s \
+                and self._rejects < self.max_rejects:
+            x, y, z = values
+            lx, ly, lz = self._last
+            if (abs(x - lx) > self.max_xy or abs(y - ly) > self.max_xy
+                    or abs(z - lz) > self.max_z_ratio * lz):
+                self._rejects += 1
+                return False
+        self._last, self._t, self._rejects = tuple(values), t, 0
+        return True
+
+
+def decay_toward(state, target, dt, tau):
+    """state'i target'a üstel olarak yaklaştırır; hız kare hızından bağımsızdır (tau saniye)."""
+    k = 1.0 - math.exp(-dt / tau)
+    return tuple(s + k * (g - s) for s, g in zip(state, target))
+
+
+def blend(a, b, k):
+    """a -> b arası yumuşak (smoothstep) geçiş; k [0, 1] dışında kırpılır."""
+    k = _clamp(k, 0.0, 1.0)
+    k = k * k * (3.0 - 2.0 * k)
+    return tuple(x + k * (y - x) for x, y in zip(a, b))
+
+
 class EMAFilter:
     """
     Exponential Moving Average:  S_t = alpha * X_t + (1 - alpha) * S_(t-1)
@@ -107,16 +156,21 @@ class OneEuroFilter:
         self.state, self._dx = tuple(new_state), tuple(new_dx)
         return self.state
 
-    def predict(self, t, horizon, axes=None):
+    def predict(self, t, horizon, axes=None, fade=None):
         """
         Son filtrelenmiş değeri, filtrelenmiş hızla t anına doğru ileri taşır.
         Kamera ~30 Hz, ekran 60 Hz: ölçümler arasındaki boşluğu doldurur, gecikmeyi azaltır.
         :param horizon: en fazla bu kadar saniye ileri tahmin (aşırı taşmayı önler)
         :param axes: tahmin uygulanacak bileşenler (None = hepsi); gürültülü Z hariç tutulabilir
+        :param fade: verilirse, ölçüm horizon'dan eskiyince tahmin bu zaman sabitiyle (sn)
+                     söner: ölçüm gelmiyorsa baş muhtemelen aynı hızla gitmiyordur
         """
         if self.state is None or self._t is None:
             return self.state
-        dt = max(0.0, min(t - self._t, horizon))
+        age = t - self._t
+        dt = max(0.0, min(age, horizon))
+        if fade is not None and age > horizon:
+            dt *= math.exp(-(age - horizon) / fade)
         return tuple(s + dx * dt if (axes is None or i in axes) else s
                      for i, (s, dx) in enumerate(zip(self.state, self._dx)))
 

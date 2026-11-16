@@ -46,7 +46,7 @@ from head_tracker import HeadTracker
 from tracker_thread import TrackerThread
 import time
 
-from signal_filter import PoseNormalizer, OneEuroFilter
+from signal_filter import PoseNormalizer, OneEuroFilter, OutlierGate, decay_toward, blend
 from off_axis import head_to_eye_cm
 from settings import Settings, nearest_aspect_index, ASPECT_PRESETS
 from renderer import Renderer, LOOKS
@@ -59,11 +59,16 @@ FRAME_W, FRAME_H = 640, 480
 # Ölçüm: Z (IPD'den) kare başına ~1.2 cm gürültülü, X/Y ise <1 piksel -> Z daha güçlü filtrelenir.
 FILTER_MIN_CUTOFF = (1.0, 1.0, 0.3)   # Hz; düşük = daha pürüzsüz, daha gecikmeli
 FILTER_BETA = (3.0, 3.0, 0.05)        # hıza tepki; yüksek = hızlı harekette daha az gecikme
+# Hız tahmini filtresi (Hz). Simülasyon (0.7 Hz baş sallama, 30 Hz kamera): 1 -> 3 Hz hareket
+# hatasını ~1/3 azaltır; durgun titreme artar ama ~0.2 kamera pikselinin altında kalır.
+FILTER_D_CUTOFF = 3.0
 PREDICT_HORIZON_S = 0.05              # ölçümler arası hareket tahmini en fazla bu kadar ileri
+PREDICT_FADE_S = 0.15                 # ölçüm gecikirse tahmin bu zaman sabitiyle söner
 PREDICT_AXES = (0, 1)                 # yalnızca X/Y tahmin edilir; Z gürültülü olduğu için hariç
 NEUTRAL_Z_CM = 60.0
 FACE_LOST_TIMEOUT_S = 1.0     # bu süreden sonra merkeze dönüş başlar
-RETURN_RATE = 0.03            # kare başına merkeze yaklaşma oranı
+RETURN_TAU_S = 0.55           # merkeze dönüş zaman sabiti (kare hızından bağımsız)
+REACQUIRE_BLEND_S = 0.25      # yüz geri gelince eski konumdan yenisine yumuşak geçiş süresi
 
 
 def main():
@@ -149,9 +154,15 @@ def main():
                 quit_early()
                 return
     clock = pygame.time.Clock()
-    filt = OneEuroFilter(FILTER_MIN_CUTOFF, FILTER_BETA)
+    filt = OneEuroFilter(FILTER_MIN_CUTOFF, FILTER_BETA, d_cutoff=FILTER_D_CUTOFF)
+    gate = OutlierGate()
     smooth = 1.0          # +/- ile değişen yumuşatma çarpanı (min_cutoff'a bölünür)
     last_seq = -1
+    last_ok_t = float("-inf")   # son kabul edilen ölçümün zamanı
+    lost = True                 # yüz kayıp mı (merkeze dönüş sürüyor)
+    blend_from, blend_t0 = None, 0.0   # yüz geri gelince yumuşak geçişin başlangıcı
+    lat_ms, meas_hz = 0.0, 0.0  # HUD: ölçüm yaşı (yakalama -> filtre) ve saniyedeki ölçüm sayısı
+    meas_count, meas_t0 = 0, time.monotonic()
     normalizer = PoseNormalizer(FRAME_W, FRAME_H)
 
     focal_mult = settings.focal_mult
@@ -244,23 +255,47 @@ def main():
                 tracker.tracker.focal_length_px = focal_px
                 pose, stamp, seq = tracker.latest_measurement()
                 now = time.monotonic()
-                if pose is not None and now - stamp < FACE_LOST_TIMEOUT_S:
-                    # Filtre yalnızca yeni kamera ölçümüyle (~30 Hz) ve ölçüm zamanıyla güncellenir;
-                    # aynı pozu her render karesinde tekrar beslemek titremeye yol açar.
-                    if seq != last_seq:
-                        last_seq = seq
-                        filt.update(normalizer.normalize(pose), stamp)
-                else:
+                # Filtre yalnızca yeni kamera ölçümüyle (~30 Hz) ve ölçüm zamanıyla güncellenir;
+                # aynı pozu her render karesinde tekrar beslemek titremeye yol açar.
+                if pose is not None and seq != last_seq:
+                    last_seq = seq
+                    meas = normalizer.normalize(pose)
+                    if gate.accept(meas, stamp):   # tek karelik sıçramalar elenir
+                        if lost:
+                            # Yüz geri geldi: eski hız/zaman durumu atılır, görüntü zıplamasın
+                            # diye merkeze dönmüş konumdan yeni konuma yumuşak geçilir.
+                            lost = False
+                            blend_from = filt.state or (0.0, 0.0, NEUTRAL_Z_CM)
+                            blend_t0 = now
+                            filt.reset()
+                        filt.update(meas, stamp)
+                        last_ok_t = stamp
+                        lat_ms += 0.1 * ((now - stamp) * 1000.0 - lat_ms)
+                        meas_count += 1
+                if now - meas_t0 >= 1.0:
+                    meas_hz, meas_count, meas_t0 = meas_count / (now - meas_t0), 0, now
+                if now - last_ok_t >= FACE_LOST_TIMEOUT_S:
                     status = "yuz yok"
+                    if not lost:
+                        lost = True
+                        gate.reset()
                     if filt.state is not None:
-                        filt.set_state(tuple(s + RETURN_RATE * (n - s) for s, n in
-                                             zip(filt.state, (0.0, 0.0, NEUTRAL_Z_CM))))
+                        filt.set_state(decay_toward(filt.state, (0.0, 0.0, NEUTRAL_Z_CM),
+                                                    dt, RETURN_TAU_S))
 
             if filt.state is not None:
                 if use_mouse or status != "takip":
                     x_n, y_n, z = filt.state
                 else:
-                    x_n, y_n, z = filt.predict(time.monotonic(), PREDICT_HORIZON_S, PREDICT_AXES)
+                    now = time.monotonic()
+                    x_n, y_n, z = filt.predict(now, PREDICT_HORIZON_S, PREDICT_AXES,
+                                               fade=PREDICT_FADE_S)
+                    if blend_from is not None:
+                        k = (now - blend_t0) / REACQUIRE_BLEND_S
+                        if k >= 1.0:
+                            blend_from = None
+                        else:
+                            x_n, y_n, z = blend(blend_from, (x_n, y_n, z), k)
                 eye = head_to_eye_cm(x_n, y_n, z, FRAME_W, FRAME_H, focal_px, cam_offset)
 
             if recorder.active:
@@ -278,8 +313,9 @@ def main():
             if hud:
                 rec = f" | REC {recorder.elapsed():.0f}s" if recorder.active else (
                     f" | kaydedildi: {os.path.basename(last_saved)}" if last_saved else "")
+                trk = "" if use_mouse else f"gec={lat_ms:.0f}ms olc={meas_hz:.0f}Hz | "
                 pygame.display.set_caption(
-                    f"Parallaks | {clock.get_fps():.0f} FPS | {status} | "
+                    f"Parallaks | {clock.get_fps():.0f} FPS | {status} | {trk}"
                     f"Z={eye[2]:.0f}cm | f={focal_mult:.2f} off={cam_offset:.1f} yum={smooth:.2f}{rec}")
     finally:
         if recorder.active:
