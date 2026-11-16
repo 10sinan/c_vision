@@ -99,6 +99,9 @@ class HeadTracker:
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
         # Sürücü kare biriktirmesin: her zaman en yeni kare işlenir (gecikme azalır)
         self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        # MJPG + 30 fps iste (sürücü desteklemezse sessizce yok sayılır)
+        self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+        self.cap.set(cv2.CAP_PROP_FPS, 30)
         self._t0 = time.monotonic()
         self._last_ts_ms = -1
 
@@ -120,6 +123,8 @@ class HeadTracker:
             return False, None, None
 
         ret, frame = self.cap.read()
+        # Yakalama zamanı: çıkarım süresi ölçüm yaşına sayılmasın (gecikme tahmini doğru olsun)
+        t_capture = time.monotonic()
         if not ret:
             return False, None, None
 
@@ -169,6 +174,7 @@ class HeadTracker:
             'y_px': float(head_center_px[1]),
             'z_cm': float(depth_z_cm),
             'ipd_px': float(ipd_px),
+            't_capture': t_capture,
             'left_eye_px': (int(left_eye_px[0]), int(left_eye_px[1])),
             'right_eye_px': (int(right_eye_px[0]), int(right_eye_px[1])),
             'head_center_px': (int(head_center_px[0]), int(head_center_px[1]))

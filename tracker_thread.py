@@ -38,7 +38,7 @@ class TrackerThread:
             if pose is not None:
                 with self._lock:
                     self._pose = pose
-                    self._stamp = time.monotonic()
+                    self._stamp = pose.get('t_capture', time.monotonic())
                     self._seq += 1
 
     def latest(self):
