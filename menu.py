@@ -30,6 +30,22 @@ DIM_COLOR = (120, 120, 140)
 SELECTED_COLOR = (255, 200, 60)
 
 
+def guide_lines(has_camera=True):
+    """:return: rehber ekranındaki (başlık, açıklama) çiftleri (OpenGL'siz, test edilebilir)"""
+    if has_camera:
+        first = ("1. Konum", "Ekrandan yaklaşık 60 cm uzakta otur; yüzün kameradan görünsün, iyi aydınlatılmış olsun.")
+    else:
+        first = ("1. Fare", "Kamera kapalı: fareyi ekranda gezdir, sahne farenin konumuna göre değişir.")
+    return [
+        first,
+        ("2. Başını oynat", "Sağa-sola, yukarı-aşağı eğil: ekran bir pencere gibi, arkasındaki oda derinleşir."),
+        ("3. Ayarlar", "Tab: ayar paneli.  Hareket etkisi zayıfsa panelden 'Hareket gücü'nü artır."),
+        ("4. Mesafe", "Derinlik yanlış hissediliyorsa K ile mesafe kalibrasyonu yap." if has_camera
+         else "M: sahne menüsüne dön.  P: ekran boyutu ayarı."),
+        ("5. Diğer", "M: sahne menüsü   V: video kaydı   F: tam ekran   ESC: çıkış"),
+    ]
+
+
 def find_models(folder):
     """:return: klasördeki model dosyalarının sıralı listesi"""
     found = []
@@ -250,6 +266,38 @@ class Menu:
             _blit_text(self.small_font,
                        "Yukarı/Aşağı: alan seç    Sol/Sağ: değiştir (Shift: büyük adım)    Enter / ESC: kaydet ve dön",
                        DIM_COLOR, 80, h - 60, h)
+            pygame.display.flip()
+            clock.tick(30)
+
+    def show_guide(self, has_camera=True):
+        """
+        İlk açılış rehberi: kısa kullanım ipuçları. Enter / Boşluk / tık ile kapanır.
+        :return: False ise pencere kapatıldı (çıkış istendi), aksi halde True
+        """
+        lines = guide_lines(has_camera)
+        clock = pygame.time.Clock()
+        while True:
+            for e in pygame.event.get():
+                if e.type == QUIT:
+                    return False
+                if e.type == VIDEORESIZE:
+                    self.renderer.resize((e.w, e.h))
+                elif e.type == KEYDOWN:
+                    if e.key in (K_RETURN, K_KP_ENTER, K_SPACE, K_ESCAPE):
+                        return True
+                elif e.type == MOUSEBUTTONDOWN and e.button == 1:
+                    return True
+            w, h = self.renderer.size
+            glClearColor(0.02, 0.02, 0.06, 1.0)
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+            glEnable(GL_BLEND)
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+            _blit_text(self.title_font, "Nasıl kullanılır?", TITLE_COLOR, 80, 50, h)
+            for i, (head, body) in enumerate(lines):
+                y = 150 + i * 78
+                _blit_text(self.item_font, head, SELECTED_COLOR, 80, y, h)
+                _blit_text(self.small_font, body, TEXT_COLOR, 80, y + 34, h)
+            _blit_text(self.small_font, "Enter / tık: başla", DIM_COLOR, 80, h - 60, h)
             pygame.display.flip()
             clock.tick(30)
 

@@ -155,7 +155,7 @@ def main():
         renderer.load_model(model_path)
     else:
         # İlk açılışta (ayar dosyası yok) ekran boyutunu soruyoruz
-        if not settings_existed and not open_settings():
+        if not settings_existed and not (open_settings() and menu.show_guide(tracker is not None)):
             quit_early()
             return
         if models:

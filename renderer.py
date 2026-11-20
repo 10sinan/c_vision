@@ -38,6 +38,7 @@ from model_loader import load_model, model_bounds
 from off_axis import off_axis_frustum, SCREEN_W_CM, SCREEN_H_CM   # varsayılan ekran boyutu
 from effects import Effects
 from shadows import Shadows
+from room_grid import wall_segments
 
 ROOM_DEPTH_CM = 40.0
 GRID_STEPS = 8            # duvarlardaki derinlik çizgisi sayısı
@@ -47,6 +48,7 @@ MAX_POPOUT_CM = 18.0      # popout açıkken modelin ön yüzü ekrandan en çok
 ROOM_DEPTH_RATIO = 0.9    # oda modunda kutu odanın derinliği / ekran genişliği
 ROOM_FILL = 0.8           # oda modunda model, odanın en çok bu kadarını kaplar (boyut çarpanından önce)
 ROOM_WALL_COLOR = (0.93, 0.92, 0.89)
+ROOM_LINE_SHADE = 0.55    # ızgara çizgilerinin duvar rengine göre koyuluğu
 ROOM_GRID = 10            # duvar başına ızgara bölmesi (köşe karartması için)
 MAX_TEXTURE_PX = 2048     # bundan büyük dokular küçültülür
 # Model başına kaydedilen görünüm ayarları (<model>.view.json) ve varsayılanları
@@ -358,6 +360,14 @@ class Renderer:
                         u0, u1, v0, v1 = i / n, (i + 1) / n, j / n, (j + 1) / n
                         for u, v in ((u0, v0), (u1, v0), (u1, v1), (u0, v0), (u1, v1), (u0, v1)):
                             vertex(o, a, b, u, v)
+            glEnd()
+            glBegin(GL_LINES)                      # derinlik ipucu: duvarlarda ince ızgara çizgileri
+            glColor4f(*(c * ROOM_LINE_SHADE for c in ROOM_WALL_COLOR), 1.0)
+            for (o, a, b, normal) in walls:
+                glNormal3f(*normal)
+                for p0, p1 in wall_segments(o, a, b, normal):
+                    glVertex3f(*p0)
+                    glVertex3f(*p1)
             glEnd()
             glEndList()
             self._room_key = key
